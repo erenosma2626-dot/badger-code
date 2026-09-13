@@ -6,6 +6,11 @@
 # Reference-only clone (has its own git history, not part of this repo)
 reference-starter-repo/
 
+# Internal orchestration tooling — not part of the submitted coding agent
+CLAUDE.md
+.agent-system/
+docs/plan.md
+
 # Python
 .venv/
 __pycache__/
