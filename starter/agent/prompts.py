@@ -74,6 +74,11 @@ Your last response contained no action. Respond with exactly one bash code \
 block to run a command, or TASK_COMPLETE on its own if the task is fully done.\
 """
 
+STUCK_LOOP_MESSAGE = """\
+You are repeating the same command. That approach is not working. \
+Try a DIFFERENT approach, inspect the error carefully, or check your current state.\
+"""
+
 
 def observation_message(observation: str) -> str:
     """Format a command's output as a user message for the conversation.

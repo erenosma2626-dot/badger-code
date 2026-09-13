@@ -1,0 +1,189 @@
+<title>Agent Karar Akışı</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --border: #ddd6cc;
+    --text: #2a2620;
+    --text-dim: #6b6458;
+    --accent: #b5651d;
+    --accent-soft: #f0e4d3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1815;
+      --surface: #24211c;
+      --border: #3a352c;
+      --text: #ede8e0;
+      --text-dim: #a8a094;
+      --accent: #e0995a;
+      --accent-soft: #3a2e1e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1815;
+    --surface: #24211c;
+    --border: #3a352c;
+    --text: #ede8e0;
+    --text-dim: #a8a094;
+    --accent: #e0995a;
+    --accent-soft: #3a2e1e;
+  }
+  body { background: var(--bg); }
+  * { box-sizing: border-box; }
+  .wrap {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 28px 20px 48px;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); font-size: 0.92rem; margin: 0 0 22px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    font-size: 0.86rem;
+    color: var(--text-dim);
+  }
+  .legend b { color: var(--text); }
+  .mermaid { display: flex; justify-content: center; }
+  code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  h2 { font-size: 1.05rem; margin: 0 0 14px; }
+  .glossary dt {
+    font-weight: 600;
+    color: var(--accent);
+    margin-top: 14px;
+    font-size: 0.94rem;
+  }
+  .glossary dt:first-child { margin-top: 0; }
+  .glossary dd {
+    margin: 4px 0 0;
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .glossary dd .why {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+</style>
+<div class="wrap">
+  <h1>Badger Code — Agent Karar Akışı</h1>
+  <p class="sub">Her Terminal-Bench görevinde <code>BaselineAgent.run()</code>'ın tur-tur izlediği yol (3 guardrail dahil, worker1'de doğrulanıyor)</p>
+
+  <div class="card">
+    <pre class="mermaid">
+flowchart TD
+    Start(["Harbor: agent.run() başlar"]) --> Init["Mesaj geçmişi:<br/>system_prompt + görev talimatı"]
+    Init --> LLM["LLM'e sor<br/><i>Qwen3-30B-A3B · Nebius</i>"]
+    LLM --> Parse{"Yanıtı parse et"}
+
+    Parse -->|"TASK_COMPLETE"| Done["termination_reason =<br/>task_complete"]
+    Parse -->|"ne bash ne TASK_COMPLETE"| Nudge["NUDGE_MESSAGE gönder"]
+    Nudge --> LLM
+
+    Parse -->|"bash bloğu var"| StuckCheck{"Son 6 komuttan<br/>3'ü aynı mı?"}
+    StuckCheck -->|"evet · ilk kez"| StuckNudge["STUCK_LOOP_MESSAGE gönder"]
+    StuckNudge --> LLM
+    StuckCheck -->|"evet · nudge sonrası tekrar"| StuckStop["termination_reason =<br/>stuck_loop_detected"]
+    StuckCheck -->|"hayır"| BgCheck{"Komut çıplak &amp;<br/>ile mi bitiyor?"}
+
+    BgCheck -->|"evet"| Transform["nohup ... &amp; disown'a<br/>dönüştür (LLM görmez)"]
+    BgCheck -->|"hayır"| Exec
+    Transform --> Exec["Docker container'da çalıştır<br/>(timeout 60sn)"]
+
+    Exec --> Classify["Komutu sınıflandır:<br/>edit / test / inspect"]
+    Classify --> Track["verification_status güncelle<br/>(passed/stale/missing/n·a)"]
+    Track --> Feedback["Çıktı mesaj geçmişine eklenir"]
+    Feedback --> TurnCheck{"MAX_TURNS (100)<br/>doldu mu?"}
+    TurnCheck -->|"hayır"| LLM
+    TurnCheck -->|"evet"| MaxTurns["termination_reason =<br/>max_turns"]
+
+    Done --> Meta["context.metadata:<br/>turns, termination_reason,<br/>verification_status"]
+    StuckStop --> Meta
+    MaxTurns --> Meta
+
+    Meta --> Verifier["Harbor: görevin test suite'i<br/>container'ın son haline karşı çalışır"]
+    Verifier --> Reward["reward: 0.0 veya 1.0<br/>→ result.json"]
+    </pre>
+  </div>
+
+  <div class="card">
+    <div class="legend">
+      <div><b>Yeşil çıkışlar (Done/MaxTurns/StuckStop)</b> — üçü de aynı "Meta" adımına akar, hangisinden geldiği <code>termination_reason</code>'da kalır.</div>
+      <div><b>Stuck-loop</b> — max_turns'ü (100) beklemeden erken çıkış; build-cython-ext'teki 91 turluk boşa dönmeyi engellemek için eklendi.</div>
+      <div><b>Arka-plan dönüşümü</b> — configure-git-webserver'da servisin oturum kapanınca ölmesini engellemek için, LLM'e şeffaf.</div>
+      <div><b>verification_status</b> — agent'ı durdurmaz, sadece regex-log'daki "test etmeden bitirme" hatasını görünür kılar.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Terimler sözlüğü — kutu kutu ne anlama geliyor</h2>
+    <dl class="glossary">
+      <dt>Harbor</dt>
+      <dd>Terminal-Bench görevlerini yöneten dış sistem/kütüphane. Bizim yazdığımız agent kodunu o çağırıyor, her görev için bir Docker container açıyor, süreyi tutuyor, iş bitince sonucu (reward) hesaplıyor. Kısacası: <i>hakem + sahne kurucu</i>.
+        <span class="why">Neden var: Herkesin agent'ını aynı, adil koşullarda test edebilmek için standart bir çalıştırma/ölçme çatısı gerekiyor.</span></dd>
+
+      <dt>Docker container</dt>
+      <dd>Gerçek bilgisayarından tamamen izole, kendi içinde küçük bir Linux işletim sistemi gibi davranan "kutu". Agent'ın çalıştırdığı her komut bu kutunun içinde kalır — senin gerçek dosyalarına, ağına dokunamaz.
+        <span class="why">Neden var: Agent hatalı/zararlı bir komut çalıştırsa bile (ör. <code>rm -rf</code>) senin bilgisayarına değil, atılabilir bir kutuya zarar verir.</span></dd>
+
+      <dt>LLM (Qwen3-30B)</dt>
+      <dd>Agent'ın "beyni" — metin okuyup metin üreten yapay zeka modeli. Biz ona "şu görevi çöz" diyoruz, o da "şu komutu çalıştır" diye cevap veriyor. Nebius üzerinden (uzak bir sunucudan) çağrılıyor.</dd>
+
+      <dt>system_prompt</dt>
+      <dd>Modele en başta, görev bilgisinden önce verilen sabit talimat — "sen bir terminal ajanısın, cevaplarını şu formatta ver" gibi. Görev boyunca değişmez.</dd>
+
+      <dt>Parse etmek</dt>
+      <dd>Modelin ürettiği serbest metni ("Şimdi ls çalıştırayım: <code>```bash ls```</code>" gibi) okuyup, içinden gerçek komutu veya "bitti" sinyalini ayıklamak. Yani modelin lafını, kodun anlayacağı bir talimata çevirmek.</dd>
+
+      <dt>TASK_COMPLETE</dt>
+      <dd>Modelin, görevi bitirdiğini bildirmek için yazması gereken özel, sabit kelime. Agent bunu gördüğünde döngüyü durdurur.</dd>
+
+      <dt>Nudge (dürtme)</dt>
+      <dd>Model beklenen formatta cevap vermediğinde (ne komut ne TASK_COMPLETE yazdıysa), ona "böyle değil, şu formatta cevap ver" diye kısa bir hatırlatma mesajı göndermek.</dd>
+
+      <dt>Stuck-loop (takılıp kalma)</dt>
+      <dd>Agent'ın aynı komutu defalarca tekrar edip hiçbir yeni sonuç/ilerleme elde edemediği durum — <code>build-cython-ext</code> görevinde 91 tur boyunca <code>cd/ls</code> tekrarlayıp durması gibi. Biz bunu "son 6 komuttan 3'ü birebir aynıysa" diye tespit ediyoruz.</dd>
+
+      <dt>Çıplak <code>&amp;</code> (arka plan operatörü)</dt>
+      <dd>Bir komutun sonuna <code>&amp;</code> koyarsan, terminal o komutu bitmesini beklemeden arka plana atar, sen hemen bir sonraki komuta geçebilirsin. Ama container/oturum kapanınca bu arka plandaki süreç de ölür — kalıcı değildir.</dd>
+
+      <dt><code>nohup</code> / <code>disown</code></dt>
+      <dd>Linux'ta bir arka-plan sürecini, onu başlatan oturum kapansa bile hayatta tutan iki teknik. <code>nohup</code> sürecin çıktısını bir dosyaya yönlendirip "kapanma sinyalini" görmezden gelmesini sağlar; <code>disown</code> ise süreci terminalin "iş listesi"nden çıkarıp tamamen bağımsız hale getirir. İkisini birlikte kullanmak, agent'ın başlattığı bir web sunucusunun görev bitince de ayakta kalmasını sağlıyor.</dd>
+
+      <dt>Sınıflandırma (classify)</dt>
+      <dd>Agent'ın çalıştırdığı her komutu otomatik olarak üç kategoriden birine koymak: <b>edit</b> (bir dosyaya yazdı), <b>test</b> (bir şeyi doğruladı — pytest, curl, git clone gibi), <b>inspect</b> (sadece baktı — ls, cat gibi). Anahtar kelime/kalıp eşleştirmesiyle yapılıyor, model bunu bilmiyor bile.</dd>
+
+      <dt>verification_status</dt>
+      <dd>Agent'ın kendi yazdığı çözümü gerçekten test edip etmediğini gösteren bir etiket: <b>passed</b> (yazdı, sonra test etti), <b>stale</b> (test etti ama sonra tekrar değiştirdi, yeniden test etmedi), <b>missing</b> (hiç test etmedi — regex-log'daki hatamız buydu), <b>not_applicable</b> (hiç dosya yazmadı). Agent'ı durdurmuyor, sadece rapora düşüyor.</dd>
+
+      <dt>termination_reason</dt>
+      <dd>Döngünün <i>neden</i> bittiğini kaydeden alan: <code>task_complete</code> (model bitti dedi), <code>max_turns</code> (100 tur doldu), <code>stuck_loop_detected</code> (takılıp kaldığı için erken kesildi).</dd>
+
+      <dt>context.metadata</dt>
+      <dd>Bizim topladığımız tüm istatistiklerin (tur sayısı, bitiş nedeni, doğrulama durumu) yazıldığı bir bilgi paketi. Harbor, görev bitince bunu okuyup sonuç dosyasına (<code>result.json</code>) kaydediyor.</dd>
+
+      <dt>MAX_TURNS</dt>
+      <dd>Agent'ın bir görevde en fazla kaç kez "düşün → komut çalıştır" döngüsüne girebileceğinin üst sınırı. Şu an 100. Bu sınıra çarparsa görev otomatik olarak (başarısız sayılarak) durur.</dd>
+
+      <dt>Verifier</dt>
+      <dd>Harbor'ın, agent işini bitirdikten (ya da zaman aşımına uğradıktan) sonra çalıştırdığı otomatik test scripti. Container'ın son haline bakıp "görev gerçekten çözüldü mü" diye kontrol ediyor — agent'ın kendisi değil, tamamen bağımsız/dışarıdan bir hakem.</dd>
+
+      <dt>Reward</dt>
+      <dd>Verifier'ın ürettiği nihai puan: <b>1.0</b> = görev tamamen doğru çözüldü, <b>0.0</b> = çözülemedi. Terminal-Bench'te ara puan yok, ya tam geçersin ya kalırsın.</dd>
+    </dl>
+  </div>
+</div>

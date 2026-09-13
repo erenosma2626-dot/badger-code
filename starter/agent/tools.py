@@ -33,10 +33,15 @@ Improvement ideas
 - Smarter truncation: prioritize stderr, keep the last N lines, etc.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 
 from harbor.environments.base import BaseEnvironment
+
+logger = logging.getLogger(__name__)
+
+_bg_counter = 0
 
 CODE_BLOCK_RE = re.compile(r"```(?:bash|sh|shell)?\s*\n(.*?)```", re.DOTALL)
 """Matches a Markdown fenced code block tagged as bash/sh/shell (or untagged).
@@ -105,9 +110,98 @@ def _truncate(text: str) -> str:
     return f"{text[:half]}\n... [{omitted} characters omitted] ...\n{text[-half:]}"
 
 
+def transform_background_command(command: str) -> tuple[str, bool]:
+    """If command ends with a bare '&' (not '&&'), wrap in nohup ... & disown."""
+    global _bg_counter
+    stripped = command.strip()
+    if stripped.endswith("&") and not stripped.endswith("&&"):
+        _bg_counter += 1
+        log_path = f"/tmp/bg_{_bg_counter}.log"
+        cmd_without_amp = stripped[:-1].rstrip()
+        if "\n" in cmd_without_amp:
+            lines = cmd_without_amp.split("\n")
+            prefix = "\n".join(lines[:-1])
+            last_cmd = lines[-1].strip()
+            transformed = f"{prefix}\nnohup {last_cmd} > {log_path} 2>&1 & disown"
+        else:
+            transformed = f"nohup {cmd_without_amp} > {log_path} 2>&1 & disown"
+        return transformed, True
+    return command, False
+
+
+class ShellObservation(str):
+    """String observation with an exit_code attribute."""
+
+    exit_code: int | None
+
+    def __new__(cls, content: str, exit_code: int | None = None):
+        obj = super().__new__(cls, content)
+        obj.exit_code = exit_code
+        return obj
+
+
+def classify_command(command: str) -> str:
+    """Classify a bash command as 'edit', 'test', or 'inspect'.
+
+    Heuristics:
+    - edit: file writes (>, >>, tee , sed -i, heredoc <<EOF ... > file)
+    - test: test and verification keywords (pytest, python -m pytest,
+            python3 -c, python -c, ./test, make test, npm test, go test,
+            curl , git clone, diff , grep -q)
+    - inspect: all other commands (cat, ls, find, etc.)
+    """
+    test_keywords = [
+        "pytest",
+        "python -m pytest",
+        "python3 -c",
+        "python -c",
+        "./test",
+        "make test",
+        "npm test",
+        "go test",
+        "curl ",
+        "curl\t",
+        "git clone",
+        "diff ",
+        "diff\t",
+        "grep -q",
+    ]
+    is_test = any(kw in command for kw in test_keywords) or command.strip() in (
+        "pytest",
+        "make test",
+        "npm test",
+        "go test",
+    )
+
+    # Exclude stream redirects (2>&1, 1>&2, >&1, >&2), /dev/null sinks, and background log sinks from edit detection
+    cleaned = re.sub(r"&>|2>&1|1>&2|>&1|>&2", "", command)
+    cleaned = re.sub(r"(?:[0-9]|&)?>>?\s*/dev/null", "", cleaned)
+    cleaned = re.sub(r"(?:[0-9]|&)?>>?\s*/tmp/bg_\d+\.log", "", cleaned)
+
+    is_edit = False
+    if "sed -i" in command or "tee " in command or "tee\t" in command:
+        is_edit = True
+    elif "<<" in command and (">" in cleaned or ">>" in cleaned):
+        is_edit = True
+    elif ">" in cleaned or ">>" in cleaned:
+        is_edit = True
+
+    if is_edit and is_test:
+        # If it has explicit file creation / sed editing, prioritize edit;
+        # otherwise, e.g. pytest > test.log is primarily a test.
+        if "sed -i" in command or "<<" in command:
+            return "edit"
+        return "test"
+    if is_edit:
+        return "edit"
+    if is_test:
+        return "test"
+    return "inspect"
+
+
 async def run_shell(
     environment: BaseEnvironment, command: str, timeout_sec: int
-) -> str:
+) -> ShellObservation:
     """Execute a bash command in the task's Docker container.
 
     Parameters
@@ -123,15 +217,23 @@ async def run_shell(
 
     Returns
     -------
-    str
+    ShellObservation
         A formatted string containing the exit code, stdout, and stderr
-        (each truncated to ``MAX_OBSERVATION_CHARS``). This string is what
-        gets fed back to the LLM as the command's "observation."
+        (each truncated to ``MAX_OBSERVATION_CHARS``) with an ``.exit_code``
+        attribute. This string is what gets fed back to the LLM as the command's "observation."
     """
+    exec_command, transformed = transform_background_command(command)
+    if transformed:
+        logger.info(
+            "Background command transformed: original=%r -> transformed=%r",
+            command,
+            exec_command,
+        )
+
     try:
-        result = await environment.exec(command=command, timeout_sec=timeout_sec)
+        result = await environment.exec(command=exec_command, timeout_sec=timeout_sec)
     except Exception as exc:
-        return f"[command did not complete: {exc}]"
+        return ShellObservation(f"[command did not complete: {exc}]", exit_code=None)
 
     parts = [f"exit code: {result.return_code}"]
     if result.stdout:
@@ -140,4 +242,4 @@ async def run_shell(
         parts.append(f"stderr:\n{_truncate(result.stderr)}")
     if not result.stdout and not result.stderr:
         parts.append("(no output)")
-    return "\n".join(parts)
+    return ShellObservation("\n".join(parts), exit_code=result.return_code)

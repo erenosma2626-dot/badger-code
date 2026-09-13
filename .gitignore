@@ -8,8 +8,12 @@ reference-starter-repo/
 
 # Internal orchestration tooling — not part of the submitted coding agent
 CLAUDE.md
+AGENTS.md
 .agent-system/
 docs/plan.md
+
+# Python build artifacts
+*.egg-info/
 
 # Python
 .venv/

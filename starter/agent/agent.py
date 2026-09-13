@@ -56,18 +56,26 @@ Environment variables
 - ``AGENT_COMMAND_TIMEOUT_SEC`` — per-command timeout in seconds (default: 60).
 """
 
+from collections import deque
 import os
+import re
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 from agent.llm import LLMClient
-from agent.prompts import NUDGE_MESSAGE, SYSTEM_PROMPT, observation_message
-from agent.tools import parse_action, run_shell
+from agent.prompts import (
+    NUDGE_MESSAGE,
+    STUCK_LOOP_MESSAGE,
+    SYSTEM_PROMPT,
+    observation_message,
+)
+from agent.tools import classify_command, parse_action, run_shell
 
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "100"))
 COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
+STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
 
 
 class BaselineAgent(BaseAgent):
@@ -137,6 +145,22 @@ class BaselineAgent(BaseAgent):
         n_output = 0
         turns = 0
         finished = False
+        termination_reason: str | None = None
+        recent_commands: deque[str] = deque(maxlen=STUCK_LOOP_WINDOW)
+        stuck_nudged = False
+
+        has_edited = False
+        pending_verification = False
+        had_successful_test_after_edit = False
+
+        def compute_verification_status() -> str:
+            if not has_edited:
+                return "not_applicable"
+            if not pending_verification:
+                return "passed"
+            if had_successful_test_after_edit:
+                return "stale"
+            return "missing"
 
         for _ in range(MAX_TURNS):
             turns += 1
@@ -154,6 +178,8 @@ class BaselineAgent(BaseAgent):
                 "turns": turns,
                 "finished": finished,
                 "messages": messages,
+                "termination_reason": termination_reason,
+                "verification_status": compute_verification_status(),
             }
 
             messages.append({"role": "assistant", "content": text})
@@ -163,7 +189,10 @@ class BaselineAgent(BaseAgent):
 
             if action.kind == "done":
                 finished = True
+                termination_reason = "task_complete"
                 context.metadata["finished"] = True
+                context.metadata["termination_reason"] = termination_reason
+                context.metadata["verification_status"] = compute_verification_status()
                 break
 
             if action.kind == "none":
@@ -172,13 +201,54 @@ class BaselineAgent(BaseAgent):
                 messages.append({"role": "user", "content": NUDGE_MESSAGE})
                 continue
 
+            # Check for stuck loop: identical command executed >= 3 times in recent history
+            if sum(1 for cmd in recent_commands if cmd == action.command) >= 3:
+                if not stuck_nudged:
+                    stuck_nudged = True
+                    self.logger.warning(
+                        "turn %d: stuck loop detected, sending nudge", turns
+                    )
+                    messages.append({"role": "user", "content": STUCK_LOOP_MESSAGE})
+                    continue
+                else:
+                    self.logger.warning(
+                        "turn %d: stuck loop repeated after nudge, terminating", turns
+                    )
+                    termination_reason = "stuck_loop_detected"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata["verification_status"] = compute_verification_status()
+                    break
+
+            recent_commands.append(action.command)
+
             # 3. Execute the command inside the task's Docker container.
             self.logger.info("turn %d: %s", turns, action.command[:200])
             observation = await run_shell(
                 environment, action.command, timeout_sec=COMMAND_TIMEOUT_SEC
             )
 
+            # Track verification status based on command classification and exit code
+            cmd_type = classify_command(action.command)
+            exit_code = getattr(observation, "exit_code", None)
+            if exit_code is None:
+                match = re.search(r"exit code:\s*(-?\d+)", observation)
+                if match:
+                    exit_code = int(match.group(1))
+
+            if cmd_type == "edit":
+                has_edited = True
+                pending_verification = True
+            elif cmd_type == "test":
+                if exit_code == 0 and has_edited:
+                    pending_verification = False
+                    had_successful_test_after_edit = True
+
             # 4. Feed the output back to the LLM as context for the next turn.
             messages.append(
                 {"role": "user", "content": observation_message(observation)}
             )
+
+        if termination_reason is None:
+            termination_reason = "max_turns"
+        context.metadata["termination_reason"] = termination_reason
+        context.metadata["verification_status"] = compute_verification_status()
