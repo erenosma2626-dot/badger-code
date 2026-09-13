@@ -9,38 +9,55 @@ Harbor orchestrates Terminal-Bench tasks. For each task it:
   3. After ``run()`` returns (or times out), Harbor runs the task's test suite
      against the container's final state to produce a reward (1.0 = pass).
 
-This file implements ``BaselineAgent``, a minimal
-`ReAct <https://arxiv.org/abs/2210.03629>`_ loop:
+This file implements ``BaselineAgent``, a ReAct
+(https://arxiv.org/abs/2210.03629) loop with guardrails added after
+studying 8 real trial transcripts (see docs/plan.md for the full analysis):
 
-    ┌──────────────────────────────────────────────┐
-    │  Send conversation (system prompt + history)  │
-    │  to the LLM via HTTP (see llm.py)             │
-    │                                               │
-    │  Parse the LLM's response (see tools.py):     │
-    │    ```bash ...```  → execute in container      │
-    │    TASK_COMPLETE   → stop the loop             │
-    │    anything else   → nudge the LLM to act      │
-    │                                               │
-    │  Append command output back as context          │
-    │  Repeat up to MAX_TURNS                        │
-    └──────────────────────────────────────────────┘
+    ┌────────────────────────────────────────────────────┐
+    │  Send conversation (system prompt + history) to the │
+    │  LLM via HTTP (see llm.py)                          │
+    │                                                     │
+    │  Parse the LLM's response (see tools.py):           │
+    │    ```bash ...```          → run in container       │
+    │    ```write_file:PATH...```→ write byte-exact       │
+    │    TASK_COMPLETE            → check for evidence,   │
+    │                                then stop the loop    │
+    │    anything else           → nudge the LLM to act    │
+    │                                                     │
+    │  Append a deterministic Receipt (not raw text guess) │
+    │  back as context. Repeat up to MAX_TURNS.            │
+    └────────────────────────────────────────────────────┘
 
 The agent **never touches your host filesystem** — it can only run commands
 inside the task's Docker container via ``environment.exec()``.
 
-What to improve
-===============
-This baseline has no planning, no error recovery, no context-window
-management, and no self-critique. Those are the levers that separate a
-20% score from an 80% score. Ideas to explore:
+Guardrails in this version
+===========================
+- **Environment bootstrap**: before turn 1, a fixed `pwd && ls -la` runs
+  automatically and its output is prepended to the task instruction, so the
+  model can't answer a task (chess-best-move trial) without at least seeing
+  what's in front of it.
+- **Evidence-based stuck-loop detection**: flags a loop only when the same
+  command AND the same exit code AND the same output repeat 3x — not just
+  the same command text. A legitimate retry (e.g. polling a server until
+  it's up) produces different output each time and is never flagged.
+- **Persistent background services**: a bare trailing `&` is rewritten to
+  `nohup ... & disown` so services survive past their own shell session.
+- **write_file tool**: writes bytes directly (via base64, no shell requoting)
+  and returns a sha256 + byte count receipt, avoiding the heredoc-quoting
+  corruption class of bugs.
+- **Completion-evidence check**: if TASK_COMPLETE is declared with no
+  successful test/verification since the last edit, the model gets ONE
+  nudge asking what evidence supports that — not a hard block.
 
-- **Planning:** Have the LLM outline a multi-step plan before acting.
-- **Context management:** Summarize or drop old turns so the conversation
-  doesn't exceed the model's context window.
-- **Error recovery:** Detect repeated failures and try a different approach.
-- **Self-verification:** Run the task's tests before declaring done.
-- **Tool use:** Give the LLM higher-level actions (read_file, write_file)
-  instead of making it compose raw bash every turn.
+What's still NOT here (deliberately deferred, see docs/plan.md)
+=================================================================
+- Full native tool-calling (Nebius function-calling API) — would remove
+  regex-based parsing entirely but is a bigger, riskier redesign that
+  deserves its own dedicated testing pass.
+- A generic "package/tool missing and no network" recovery strategy.
+- Forcing the model to `cat` a file before grepping it (still prompt-level,
+  not mechanically enforced).
 
 Run it
 ======
@@ -54,11 +71,11 @@ Environment variables
 =====================
 - ``AGENT_MAX_TURNS``  — max reasoning/action cycles per task (default: 100).
 - ``AGENT_COMMAND_TIMEOUT_SEC`` — per-command timeout in seconds (default: 60).
+- ``AGENT_STUCK_LOOP_WINDOW`` — how many recent actions to compare (default: 6).
 """
 
 from collections import deque
 import os
-import re
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -66,20 +83,36 @@ from harbor.models.agent.context import AgentContext
 
 from agent.llm import LLMClient
 from agent.prompts import (
+    COMPLETION_EVIDENCE_MESSAGE,
     NUDGE_MESSAGE,
     STUCK_LOOP_MESSAGE,
     SYSTEM_PROMPT,
     observation_message,
 )
-from agent.tools import classify_command, parse_action, run_shell
+from agent.tools import (
+    classify_command,
+    output_hash,
+    parse_action,
+    run_shell,
+    run_write_file,
+)
 
 MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "100"))
 COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
 STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
+STUCK_LOOP_THRESHOLD = 3
+
+BOOTSTRAP_COMMAND = "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null"
+"""Run once, before turn 1, so the model sees the actual working directory
+and file layout before it does anything else. Motivated by the
+chess-best-move trial (docs/plan.md), where the agent wrote a hardcoded
+answer without ever looking at the task's input files."""
 
 
 class BaselineAgent(BaseAgent):
-    """A minimal ReAct agent that solves tasks by issuing bash commands.
+    """A ReAct agent that solves tasks by issuing bash commands or writing
+    files directly, with evidence-based guardrails against the failure
+    modes observed in this project's own trial logs (docs/plan.md).
 
     Harbor discovers this class via the ``--agent`` CLI flag.
     It calls ``setup()`` once, then ``run()`` once per task. The class must
@@ -92,7 +125,7 @@ class BaselineAgent(BaseAgent):
         return "mlm26-baseline"
 
     def version(self) -> str | None:
-        return "0.1.0"
+        return "0.2.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
         """Called once before ``run()``. Install tools inside the container.
@@ -117,9 +150,8 @@ class BaselineAgent(BaseAgent):
         Parameters
         ----------
         instruction : str
-            The task description (e.g., "find the lost git changes and merge
-            them into master"). This is what the LLM sees as the first user
-            message.
+            The task description. This is what the LLM sees as the first
+            user message (with an environment-bootstrap snapshot prepended).
         environment : BaseEnvironment
             The Docker container interface. The only way to interact with the
             task is ``environment.exec(command=..., timeout_sec=...)``, which
@@ -133,12 +165,22 @@ class BaselineAgent(BaseAgent):
         """
         llm = LLMClient(model_name=self.model_name)
 
-        # The conversation is a plain list of OpenAI-format message dicts.
-        # The system prompt (from prompts.py) tells the LLM how to behave;
-        # the first user message is the task instruction from Harbor.
+        # Environment bootstrap: show the model what it's actually working
+        # with before it takes a single action. This doesn't cost a turn —
+        # it's folded into the first user message.
+        bootstrap_observation = await run_shell(
+            environment, BOOTSTRAP_COMMAND, timeout_sec=COMMAND_TIMEOUT_SEC
+        )
+        augmented_instruction = (
+            f"{instruction}\n\n"
+            f"Automatic environment snapshot (pwd, current directory listing, "
+            f"and /app if present) — inspect it before acting:\n"
+            f"{bootstrap_observation}"
+        )
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": instruction},
+            {"role": "user", "content": augmented_instruction},
         ]
 
         n_input = 0
@@ -146,12 +188,18 @@ class BaselineAgent(BaseAgent):
         turns = 0
         finished = False
         termination_reason: str | None = None
-        recent_commands: deque[str] = deque(maxlen=STUCK_LOOP_WINDOW)
+
+        # Evidence-based stuck-loop state: compare (kind, command_or_path,
+        # exit_code, output_hash) fingerprints, not raw command text. A
+        # retried command whose *outcome* changes (e.g. polling a server
+        # until it's ready) is never mistaken for a stuck loop.
+        recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         stuck_nudged = False
 
         has_edited = False
         pending_verification = False
         had_successful_test_after_edit = False
+        completion_evidence_nudged = False
 
         def compute_verification_status() -> str:
             if not has_edited:
@@ -188,6 +236,19 @@ class BaselineAgent(BaseAgent):
             action = parse_action(text)
 
             if action.kind == "done":
+                if pending_verification and not completion_evidence_nudged:
+                    # One gentle check before accepting completion: has
+                    # anything actually verified the last edit? See the
+                    # regex-log / log-summary-date-ranges / polyglot-c-py
+                    # trials in docs/plan.md — all three declared done with
+                    # zero evidence. This is a nudge, not a hard block: if
+                    # the model still says done afterward, we accept it.
+                    completion_evidence_nudged = True
+                    messages.append(
+                        {"role": "user", "content": COMPLETION_EVIDENCE_MESSAGE}
+                    )
+                    continue
+
                 finished = True
                 termination_reason = "task_complete"
                 context.metadata["finished"] = True
@@ -196,48 +257,78 @@ class BaselineAgent(BaseAgent):
                 break
 
             if action.kind == "none":
-                # The LLM didn't produce a bash block or TASK_COMPLETE.
-                # Nudge it to follow the protocol.
+                # The LLM didn't produce a valid action. Nudge it to follow
+                # the protocol.
                 messages.append({"role": "user", "content": NUDGE_MESSAGE})
                 continue
 
-            # Check for stuck loop: identical command executed >= 3 times in recent history
-            if sum(1 for cmd in recent_commands if cmd == action.command) >= 3:
-                if not stuck_nudged:
-                    stuck_nudged = True
-                    self.logger.warning(
-                        "turn %d: stuck loop detected, sending nudge", turns
-                    )
-                    messages.append({"role": "user", "content": STUCK_LOOP_MESSAGE})
-                    continue
-                else:
-                    self.logger.warning(
-                        "turn %d: stuck loop repeated after nudge, terminating", turns
-                    )
-                    termination_reason = "stuck_loop_detected"
-                    context.metadata["termination_reason"] = termination_reason
-                    context.metadata["verification_status"] = compute_verification_status()
-                    break
+            if action.kind == "write_file":
+                observation = await run_write_file(
+                    environment,
+                    action.path,
+                    action.content,
+                    timeout_sec=COMMAND_TIMEOUT_SEC,
+                )
+                has_edited = True
+                pending_verification = True
+                completion_evidence_nudged = False
 
-            recent_commands.append(action.command)
+                fingerprint = observation.receipt.fingerprint()
+                recent_fingerprints.append(fingerprint)
+                messages.append(
+                    {"role": "user", "content": observation_message(observation)}
+                )
+                continue
 
-            # 3. Execute the command inside the task's Docker container.
+            # action.kind == "shell" from here on.
+
+            # 3. Execute the command, THEN check whether its outcome is a
+            # genuine repeat (evidence-based, not just matching command text).
             self.logger.info("turn %d: %s", turns, action.command[:200])
             observation = await run_shell(
                 environment, action.command, timeout_sec=COMMAND_TIMEOUT_SEC
             )
 
-            # Track verification status based on command classification and exit code
+            fingerprint = (
+                *observation.receipt.fingerprint(),
+                output_hash(str(observation)),
+            )
+            repeat_count = sum(1 for f in recent_fingerprints if f == fingerprint)
+            recent_fingerprints.append(fingerprint)
+
+            if repeat_count + 1 >= STUCK_LOOP_THRESHOLD:
+                if not stuck_nudged:
+                    stuck_nudged = True
+                    self.logger.warning(
+                        "turn %d: stuck loop detected (same command, exit "
+                        "code, and output %d times), sending nudge",
+                        turns,
+                        repeat_count + 1,
+                    )
+                    messages.append({"role": "user", "content": STUCK_LOOP_MESSAGE})
+                    continue
+                else:
+                    self.logger.warning(
+                        "turn %d: stuck loop repeated after nudge, terminating",
+                        turns,
+                    )
+                    termination_reason = "stuck_loop_detected"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata[
+                        "verification_status"
+                    ] = compute_verification_status()
+                    break
+
+            # Track verification status based on command classification and
+            # exit code (a heuristic — see classify_command's docstring for
+            # its known false-negative on binary-execution-as-verification).
             cmd_type = classify_command(action.command)
-            exit_code = getattr(observation, "exit_code", None)
-            if exit_code is None:
-                match = re.search(r"exit code:\s*(-?\d+)", observation)
-                if match:
-                    exit_code = int(match.group(1))
+            exit_code = observation.receipt.exit_code
 
             if cmd_type == "edit":
                 has_edited = True
                 pending_verification = True
+                completion_evidence_nudged = False
             elif cmd_type == "test":
                 if exit_code == 0 and has_edited:
                     pending_verification = False

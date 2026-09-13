@@ -1,19 +1,27 @@
 """Action parsing and command execution.
 
 This file is the bridge between the LLM's text output and the Docker
-container. It handles two things:
+container. It handles three things:
 
 1. **Parsing** — Extracting a structured ``Action`` from the LLM's
    free-text response. The baseline protocol is intentionally simple so
    that even small local models (~7B) can follow it reliably:
    - A fenced ``bash`` code block → run that command in the container.
-   - The literal string ``TASK_COMPLETE`` → stop the loop.
+   - A fenced ``write_file:PATH`` code block → write content to PATH
+     byte-exact, no shell quoting involved.
+   - The literal string ``TASK_COMPLETE`` (outside any code block, or as
+     the ONLY content of a code block) → stop the loop.
    - Anything else → the LLM didn't follow the protocol; agent.py will
      send a nudge message asking it to try again.
 
 2. **Execution** — Running the parsed command inside the task's Docker
    container via Harbor's ``environment.exec()`` and formatting the
    stdout/stderr/exit-code into a string the LLM can read.
+
+3. **Evidence-based stuck-loop detection** — comparing not just the
+   command text but (command, exit_code, output_hash) triples, so a
+   legitimate retry (e.g. polling a server until it's ready) isn't
+   confused with genuine no-progress looping.
 
 Output truncation
 =================
@@ -26,16 +34,17 @@ tail-only, or summarizing) is a good improvement target.
 
 Improvement ideas
 =================
-- Add richer action types (read_file, write_file, search) so the LLM
-  doesn't have to compose raw bash for common operations.
-- Parse multiple code blocks and execute them sequentially.
-- Detect and break out of repeated-command loops.
+- Full native tool-calling (Nebius/OpenAI function-calling API) instead of
+  markdown-fence conventions — removes ALL free-text parsing ambiguity.
+  Bigger change, deliberately deferred; see docs/plan.md.
+- read_file / search_text / read_output(action_id, offset) tools.
 - Smarter truncation: prioritize stderr, keep the last N lines, etc.
 """
 
+import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from harbor.environments.base import BaseEnvironment
 
@@ -47,13 +56,25 @@ CODE_BLOCK_RE = re.compile(r"```(?:bash|sh|shell)?\s*\n(.*?)```", re.DOTALL)
 """Matches a Markdown fenced code block tagged as bash/sh/shell (or untagged).
 The captured group (1) is everything between the opening and closing fences."""
 
+WRITE_FILE_RE = re.compile(r"```write_file:(\S+)\s*\n(.*?)```", re.DOTALL)
+"""Matches a ```write_file:/path/to/file\\n<content>\\n``` block. Captured
+groups are (1) the target path and (2) the raw file content."""
+
 DONE_MARKER = "TASK_COMPLETE"
-"""The literal string the LLM must emit (outside a code block) to signal
-that it believes the task is finished."""
+"""The literal string the LLM must emit (outside a code block, or as the
+sole content of one) to signal that it believes the task is finished."""
 
 MAX_OBSERVATION_CHARS = 6000
 """Maximum characters to keep from a command's combined output. Longer
 output is truncated to the first and last halves with an omission notice."""
+
+STUCK_LOOP_WINDOW = 6
+"""How many recent (command, exit_code, output_hash) triples to remember
+for evidence-based stuck-loop detection."""
+
+STUCK_LOOP_THRESHOLD = 3
+"""How many times the exact same (command, exit_code, output_hash) triple
+must repeat within the window before it counts as a stuck loop."""
 
 
 @dataclass
@@ -63,21 +84,34 @@ class Action:
     Attributes
     ----------
     kind : str
-        One of ``"shell"`` (run a command), ``"done"`` (task complete),
-        or ``"none"`` (no valid action found — LLM didn't follow protocol).
+        One of ``"shell"`` (run a command), ``"write_file"`` (write a file
+        byte-exact), ``"done"`` (task complete), or ``"none"`` (no valid
+        action found — LLM didn't follow protocol).
     command : str
         The bash command to execute. Only meaningful when ``kind == "shell"``.
+    path : str
+        Target file path. Only meaningful when ``kind == "write_file"``.
+    content : str
+        File content to write. Only meaningful when ``kind == "write_file"``.
     """
 
     kind: str
     command: str = ""
+    path: str = ""
+    content: str = ""
 
 
 def parse_action(text: str) -> Action:
     """Extract a single action from the LLM's response text.
 
-    Precedence: a code block wins over a ``TASK_COMPLETE`` mention, so the
-    model can discuss finishing without accidentally terminating.
+    Precedence: a ``write_file`` block wins over a bash block (checked
+    first, distinct fence tag), a bash block wins over a bare
+    ``TASK_COMPLETE`` mention — UNLESS the bash block's entire stripped
+    content is exactly ``TASK_COMPLETE``, in which case it is treated as
+    completion rather than executed as a literal (and doomed to fail)
+    shell command. This second rule exists because smaller models
+    sometimes wrap the completion marker in a code fence by mistake; see
+    docs/plan.md for the polyglot-c-py trial that surfaced this bug.
 
     Parameters
     ----------
@@ -87,13 +121,20 @@ def parse_action(text: str) -> Action:
     Returns
     -------
     Action
-        The parsed action. ``kind`` is ``"shell"`` if a bash block was found,
-        ``"done"`` if TASK_COMPLETE was found (and no code block), or
-        ``"none"`` if neither was present.
+        The parsed action.
     """
+    write_match = WRITE_FILE_RE.search(text)
+    if write_match:
+        path = write_match.group(1).strip()
+        content = write_match.group(2)
+        if path:
+            return Action("write_file", path=path, content=content)
+
     match = CODE_BLOCK_RE.search(text)
     if match:
         command = match.group(1).strip()
+        if command == DONE_MARKER:
+            return Action("done")
         if command:
             return Action("shell", command)
     if DONE_MARKER in text:
@@ -111,7 +152,15 @@ def _truncate(text: str) -> str:
 
 
 def transform_background_command(command: str) -> tuple[str, bool]:
-    """If command ends with a bare '&' (not '&&'), wrap in nohup ... & disown."""
+    """If command ends with a bare '&' (not '&&'), wrap in nohup ... & disown.
+
+    A command backgrounded this way dies the moment the shell session that
+    launched it closes — which happens between agent turns. Wrapping it in
+    nohup (ignore hangup signal, redirect output to a file) plus disown
+    (detach from the shell's job table) keeps it alive so a later verifier
+    step can actually reach it. See the configure-git-webserver trial in
+    docs/plan.md for the failure this fixes.
+    """
     global _bg_counter
     stripped = command.strip()
     if stripped.endswith("&") and not stripped.endswith("&&"):
@@ -129,15 +178,63 @@ def transform_background_command(command: str) -> tuple[str, bool]:
     return command, False
 
 
-class ShellObservation(str):
-    """String observation with an exit_code attribute."""
+@dataclass
+class Receipt:
+    """A deterministic record of one executed action.
 
+    Unlike the raw text `ShellObservation`, every field here is a concrete
+    value the model cannot misread or talk itself out of — it either ran
+    successfully or it didn't, it either touched a file or it didn't.
+    Motivated by Terra's (worker3) literature review: the dominant failure
+    class across our regression set (regex-log, build-cython-ext,
+    chess-best-move, ...) was the model believing an action succeeded
+    without any evidence. See docs/plan.md.
+    """
+
+    kind: str  # "shell" or "write_file"
+    command_or_path: str
     exit_code: int | None
+    timed_out: bool
+    declared_target_paths: list[str] = field(default_factory=list)
+    content_sha256: str | None = None
+    content_bytes: int | None = None
 
-    def __new__(cls, content: str, exit_code: int | None = None):
+    def fingerprint(self) -> tuple:
+        """A hashable key for evidence-based stuck-loop comparison."""
+        return (self.kind, self.command_or_path, self.exit_code)
+
+
+class ShellObservation(str):
+    """String observation with a `.receipt` attribute carrying structured,
+    deterministic metadata about the command that produced it (see Receipt).
+    """
+
+    receipt: Receipt
+
+    def __new__(cls, content: str, receipt: Receipt):
         obj = super().__new__(cls, content)
-        obj.exit_code = exit_code
+        obj.receipt = receipt
         return obj
+
+
+_EDIT_TARGET_RE = re.compile(
+    r"(?:^|\s)(?:[0-9]|&)?>>?\s*(?!/dev/null|&)(\S+)"
+)
+"""Best-effort extraction of a shell redirection target (`> path` or `>>
+path`), used only to populate Receipt.declared_target_paths for the edit
+classifier below. Not a full shell parser — heredocs and `tee path` are
+handled separately."""
+
+
+def _extract_declared_targets(command: str) -> list[str]:
+    """Best-effort list of file paths a shell command appears to write to."""
+    targets = []
+    for m in _EDIT_TARGET_RE.finditer(command):
+        targets.append(m.group(1))
+    tee_match = re.search(r"\btee\s+(?:-a\s+)?(\S+)", command)
+    if tee_match:
+        targets.append(tee_match.group(1))
+    return targets
 
 
 def classify_command(command: str) -> str:
@@ -149,6 +246,14 @@ def classify_command(command: str) -> str:
             python3 -c, python -c, ./test, make test, npm test, go test,
             curl , git clone, diff , grep -q)
     - inspect: all other commands (cat, ls, find, etc.)
+
+    Known limitation (observed in the sqlite-with-gcov trial, see
+    docs/plan.md): a command that verifies a solution by directly running
+    a compiled binary (e.g. `./sqlite3 --version`) isn't in this keyword
+    list and gets classified as 'inspect', producing a false-negative
+    verification_status even though the task actually passed. The
+    Receipt/tool-calling redesign is the real fix; this heuristic is a
+    stopgap.
     """
     test_keywords = [
         "pytest",
@@ -218,9 +323,8 @@ async def run_shell(
     Returns
     -------
     ShellObservation
-        A formatted string containing the exit code, stdout, and stderr
-        (each truncated to ``MAX_OBSERVATION_CHARS``) with an ``.exit_code``
-        attribute. This string is what gets fed back to the LLM as the command's "observation."
+        A formatted string (exit code, stdout, stderr, each truncated) with
+        a ``.receipt`` attribute carrying structured, deterministic metadata.
     """
     exec_command, transformed = transform_background_command(command)
     if transformed:
@@ -233,7 +337,14 @@ async def run_shell(
     try:
         result = await environment.exec(command=exec_command, timeout_sec=timeout_sec)
     except Exception as exc:
-        return ShellObservation(f"[command did not complete: {exc}]", exit_code=None)
+        timed_out = "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
+        receipt = Receipt(
+            kind="shell",
+            command_or_path=command,
+            exit_code=None,
+            timed_out=timed_out,
+        )
+        return ShellObservation(f"[command did not complete: {exc}]", receipt)
 
     parts = [f"exit code: {result.return_code}"]
     if result.stdout:
@@ -242,4 +353,93 @@ async def run_shell(
         parts.append(f"stderr:\n{_truncate(result.stderr)}")
     if not result.stdout and not result.stderr:
         parts.append("(no output)")
-    return ShellObservation("\n".join(parts), exit_code=result.return_code)
+    text = "\n".join(parts)
+
+    receipt = Receipt(
+        kind="shell",
+        command_or_path=command,
+        exit_code=result.return_code,
+        timed_out=False,
+        declared_target_paths=_extract_declared_targets(command),
+    )
+    return ShellObservation(text, receipt)
+
+
+async def run_write_file(
+    environment: BaseEnvironment, path: str, content: str, timeout_sec: int
+) -> ShellObservation:
+    """Write `content` to `path` inside the container, byte-exact.
+
+    Avoids all shell-quoting pitfalls (heredoc delimiters, `$`, backslashes,
+    embedded quotes) by base64-encoding the content and decoding it on the
+    container side via a short Python one-liner — the shell itself never
+    sees or re-interprets the actual file content. Returns a receipt
+    including a sha256 hash and byte count so the model has concrete proof
+    the write landed correctly, rather than assuming a heredoc "worked".
+
+    Parameters
+    ----------
+    environment : BaseEnvironment
+        Harbor's container interface.
+    path : str
+        Destination path inside the container.
+    content : str
+        Raw file content (text). Encoded as UTF-8 before base64.
+    timeout_sec : int
+        Timeout for the underlying write command.
+    """
+    import base64
+
+    raw = content.encode("utf-8")
+    b64 = base64.b64encode(raw).decode("ascii")
+    sha256 = hashlib.sha256(raw).hexdigest()
+
+    # Written as a single python3 invocation; base64 payload contains only
+    # [A-Za-z0-9+/=], which cannot break shell quoting.
+    write_cmd = (
+        f"python3 -c \"import base64,pathlib; "
+        f"p = pathlib.Path({path!r}); p.parent.mkdir(parents=True, exist_ok=True); "
+        f"p.write_bytes(base64.b64decode('{b64}'))\" "
+        f"&& echo WRITE_OK"
+    )
+
+    try:
+        result = await environment.exec(command=write_cmd, timeout_sec=timeout_sec)
+    except Exception as exc:
+        receipt = Receipt(
+            kind="write_file",
+            command_or_path=path,
+            exit_code=None,
+            timed_out=True,
+            content_sha256=sha256,
+            content_bytes=len(raw),
+        )
+        return ShellObservation(f"[write_file did not complete: {exc}]", receipt)
+
+    ok = result.return_code == 0 and "WRITE_OK" in (result.stdout or "")
+    text = (
+        f"write_file {path}: "
+        + ("OK" if ok else f"FAILED (exit {result.return_code})")
+        + f"\nbytes={len(raw)} sha256={sha256}"
+    )
+    if not ok and result.stderr:
+        text += f"\nstderr:\n{_truncate(result.stderr)}"
+
+    receipt = Receipt(
+        kind="write_file",
+        command_or_path=path,
+        exit_code=result.return_code,
+        timed_out=False,
+        declared_target_paths=[path],
+        content_sha256=sha256,
+        content_bytes=len(raw),
+    )
+    return ShellObservation(text, receipt)
+
+
+def output_hash(observation: str) -> str:
+    """Short hash of an observation's text, used as part of the stuck-loop
+    evidence fingerprint (see agent.py). Two runs of the same command with
+    genuinely different output (e.g. a server that just came up) hash
+    differently and are correctly treated as progress, not a stuck loop."""
+    return hashlib.sha256(observation.encode("utf-8", errors="replace")).hexdigest()[:12]

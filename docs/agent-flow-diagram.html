@@ -1,4 +1,5 @@
 <title>Agent Karar Akışı</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
 <style>
   :root {
     --bg: #faf9f7;
@@ -56,7 +57,6 @@
     color: var(--text-dim);
   }
   .legend b { color: var(--text); }
-  .mermaid { display: flex; justify-content: center; }
   code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
   h2 { font-size: 1.05rem; margin: 0 0 14px; }
   .glossary dt {
@@ -84,39 +84,39 @@
   <p class="sub">Her Terminal-Bench görevinde <code>BaselineAgent.run()</code>'ın tur-tur izlediği yol (3 guardrail dahil, worker1'de doğrulanıyor)</p>
 
   <div class="card">
-    <pre class="mermaid">
+    <pre class="mermaid" id="flowdiagram">
 flowchart TD
-    Start(["Harbor: agent.run() başlar"]) --> Init["Mesaj geçmişi:<br/>system_prompt + görev talimatı"]
-    Init --> LLM["LLM'e sor<br/><i>Qwen3-30B-A3B · Nebius</i>"]
-    LLM --> Parse{"Yanıtı parse et"}
+    Start(["Harbor gorevi baslatir"]) --> Init["Mesaj gecmisi olusturulur: system_prompt + gorev talimati"]
+    Init --> LLM["LLM'e sor (Qwen3-30B-A3B, Nebius)"]
+    LLM --> Parse{"Yaniti parse et"}
 
-    Parse -->|"TASK_COMPLETE"| Done["termination_reason =<br/>task_complete"]
-    Parse -->|"ne bash ne TASK_COMPLETE"| Nudge["NUDGE_MESSAGE gönder"]
+    Parse -->|"TASK_COMPLETE"| Done["termination_reason: task_complete"]
+    Parse -->|"ne bash ne TASK_COMPLETE"| Nudge["NUDGE_MESSAGE gonder"]
     Nudge --> LLM
 
-    Parse -->|"bash bloğu var"| StuckCheck{"Son 6 komuttan<br/>3'ü aynı mı?"}
-    StuckCheck -->|"evet · ilk kez"| StuckNudge["STUCK_LOOP_MESSAGE gönder"]
+    Parse -->|"bash blogu var"| StuckCheck{"Son 6 komuttan 3'u ayni mi"}
+    StuckCheck -->|"evet, ilk kez"| StuckNudge["STUCK_LOOP_MESSAGE gonder"]
     StuckNudge --> LLM
-    StuckCheck -->|"evet · nudge sonrası tekrar"| StuckStop["termination_reason =<br/>stuck_loop_detected"]
-    StuckCheck -->|"hayır"| BgCheck{"Komut çıplak &amp;<br/>ile mi bitiyor?"}
+    StuckCheck -->|"evet, tekrar"| StuckStop["termination_reason: stuck_loop_detected"]
+    StuckCheck -->|"hayir"| BgCheck{"Komut ciplak ampersand ile mi bitiyor"}
 
-    BgCheck -->|"evet"| Transform["nohup ... &amp; disown'a<br/>dönüştür (LLM görmez)"]
-    BgCheck -->|"hayır"| Exec
-    Transform --> Exec["Docker container'da çalıştır<br/>(timeout 60sn)"]
+    BgCheck -->|"evet"| Transform["nohup ve disown ile donustur, LLM gormez"]
+    BgCheck -->|"hayir"| Exec["Docker container icinde calistir, 60sn siniri"]
+    Transform --> Exec
 
-    Exec --> Classify["Komutu sınıflandır:<br/>edit / test / inspect"]
-    Classify --> Track["verification_status güncelle<br/>(passed/stale/missing/n·a)"]
-    Track --> Feedback["Çıktı mesaj geçmişine eklenir"]
-    Feedback --> TurnCheck{"MAX_TURNS (100)<br/>doldu mu?"}
-    TurnCheck -->|"hayır"| LLM
-    TurnCheck -->|"evet"| MaxTurns["termination_reason =<br/>max_turns"]
+    Exec --> Classify["Komutu siniflandir: edit, test veya inspect"]
+    Classify --> Track["verification_status guncellenir"]
+    Track --> Feedback["Cikti mesaj gecmisine eklenir"]
+    Feedback --> TurnCheck{"MAX_TURNS yani 100 doldu mu"}
+    TurnCheck -->|"hayir"| LLM
+    TurnCheck -->|"evet"| MaxTurns["termination_reason: max_turns"]
 
-    Done --> Meta["context.metadata:<br/>turns, termination_reason,<br/>verification_status"]
+    Done --> Meta["context.metadata: turns, termination_reason, verification_status"]
     StuckStop --> Meta
     MaxTurns --> Meta
 
-    Meta --> Verifier["Harbor: görevin test suite'i<br/>container'ın son haline karşı çalışır"]
-    Verifier --> Reward["reward: 0.0 veya 1.0<br/>→ result.json"]
+    Meta --> Verifier["Harbor verifier: test suite container'in son haline bakar"]
+    Verifier --> Reward["reward 0.0 veya 1.0, result.json'a yazilir"]
     </pre>
   </div>
 
@@ -186,4 +186,83 @@ flowchart TD
       <dd>Verifier'ın ürettiği nihai puan: <b>1.0</b> = görev tamamen doğru çözüldü, <b>0.0</b> = çözülemedi. Terminal-Bench'te ara puan yok, ya tam geçersin ya kalırsın.</dd>
     </dl>
   </div>
+
+  <div class="card">
+    <h2>Terra'nın Önerisi — Beklenen Gelecek Mimari</h2>
+    <p class="sub" style="margin-bottom:16px;">Yeşil kutular Terra'nın literatür taramasından çıkan YENİ/DEĞİŞEN parçalar; gri kutular mevcut sistemden aynen kalanlar. Henüz uygulanmadı — bu bir hedef taslağı.</p>
+    <pre class="mermaid" id="futurediagram">
+flowchart TD
+    Start(["Harbor gorevi baslatir"]) --> Init["Baslangic: system_prompt + gorev + BOS bir Plan Todo alani"]
+    Init --> LLM["LLM'e sor: artik serbest metin degil, yapisal tool cagrisi"]
+    LLM --> PlanUpdate["Model once gorunur Plan Todo alanini gunceller"]
+    PlanUpdate --> ToolChoice{"Model hangi araci secti"}
+
+    ToolChoice -->|"terminal_exec"| StuckCheck{"Ayni komut ve ayni exit_code ve ayni cikti ve dosya degisikligi yok mu"}
+    StuckCheck -->|"evet"| StuckNudge["Kanit temelli nudge: farkli bir sey dene"]
+    StuckNudge --> LLM
+    StuckCheck -->|"hayir"| BgCheck{"Komut ciplak ampersand ile mi bitiyor"}
+    BgCheck -->|"evet"| Transform["nohup ve disown ile donustur"]
+    BgCheck -->|"hayir"| Exec["Docker container icinde calistir"]
+    Transform --> Exec
+    Exec --> Receipt["Deterministik execution receipt: exit_code, timeout, cwd, cikti ozeti, degisen dosyalar, log referansi"]
+    Receipt --> Feedback["Receipt LLM'e geri beslenir, ham log degil"]
+    Feedback --> LLM
+
+    ToolChoice -->|"write_file"| WriteFile["Dosya shell'siz dogrudan yazilir, hash ve byte sayisi donulur"]
+    WriteFile --> LLM
+
+    ToolChoice -->|"read_file"| ReadFile["Dosya satir numarasi ve hash ile okunur"]
+    ReadFile --> LLM
+
+    ToolChoice -->|"read_output"| ReadOutput["Onceki bir receipt'in tam logu talep uzerine getirilir"]
+    ReadOutput --> LLM
+
+    ToolChoice -->|"search_text"| SearchText["Dosyalarda kisa ozetli arama yapilir"]
+    SearchText --> LLM
+
+    ToolChoice -->|"task_complete"| EvidenceCheck{"Son duzenlemeden sonra kanit action id var mi"}
+    EvidenceCheck -->|"hayir, ilk kez"| EvidenceNudge["Nazik nudge: hangi kanitla bitirdin"]
+    EvidenceNudge --> LLM
+    EvidenceCheck -->|"evet, ya da nudge sonrasi yine hayir"| Done["termination_reason: task_complete"]
+
+    Done --> Meta["context.metadata: turns, termination_reason, receipt gecmisi"]
+    Meta --> Verifier["Harbor verifier calisir"]
+    Verifier --> Reward["reward result.json'a yazilir"]
+
+    classDef newNode fill:#1b4332,stroke:#52b788,color:#d8f3dc,stroke-width:2px;
+    class LLM,PlanUpdate,ToolChoice,StuckCheck,StuckNudge,Receipt,Feedback,WriteFile,ReadFile,ReadOutput,SearchText,EvidenceCheck,EvidenceNudge newNode;
+    </pre>
+    <div class="legend" style="margin-top:14px;">
+      <div><b>Yapisal tool-call</b> — regex ile bash bloğu ayıklamak yerine, model doğrudan <code>{"tool": "terminal_exec", ...}</code> gibi şemalı bir nesne üretiyor.</div>
+      <div><b>Execution receipt</b> — ham "exit code + stdout metni" yerine, modelin yanlış yorumlayamayacağı sabit alanlı bir kanıt paketi.</div>
+      <div><b>Kanıt-temelli stuck-check</b> — sadece komut metni değil, exit_code + çıktı + dosya-değişikliği dörtlüsüne bakarak meşru yeniden-denemeyi takılıp-kalmadan ayırıyor.</div>
+      <div><b>Tamamlama kanıtı</b> — <code>task_complete</code> öncesi "hangi kanıtla?" diye bir kez soruyor, sert engel değil.</div>
+    </div>
+  </div>
 </div>
+<script>
+  (function () {
+    var ids = ["flowdiagram", "futurediagram"];
+    function renderDiagrams() {
+      if (typeof mermaid === "undefined") {
+        setTimeout(renderDiagrams, 100);
+        return;
+      }
+      var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var explicit = document.documentElement.getAttribute("data-theme");
+      var dark = explicit ? explicit === "dark" : isDark;
+      mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose" });
+      ids.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var src = el.textContent;
+        mermaid.render(id + "-svg", src).then(function (result) {
+          el.outerHTML = '<div class="mermaid-rendered" style="display:flex;justify-content:center;overflow-x:auto;">' + result.svg + "</div>";
+        }).catch(function (err) {
+          el.insertAdjacentHTML("beforebegin", '<p style="color:#c0392b;font-size:0.8rem;">Diyagram render hatası: ' + String(err).slice(0, 300) + "</p>");
+        });
+      });
+    }
+    renderDiagrams();
+  })();
+</script>
