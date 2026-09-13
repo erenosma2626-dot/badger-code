@@ -392,15 +392,40 @@ async def run_write_file(
 
     raw = content.encode("utf-8")
     b64 = base64.b64encode(raw).decode("ascii")
+    # The destination path is base64-encoded too. `path` is LLM-controlled
+    # text, not a literal — embedding it directly into a shell command
+    # (e.g. via Python's `!r` repr, as this used to do) is a shell-injection
+    # risk if it ever contains quotes/`$()`/backticks. Base64 output is
+    # restricted to [A-Za-z0-9+/=], so neither the content nor the path can
+    # break out of the surrounding quotes.
+    path_b64 = base64.b64encode(path.encode("utf-8")).decode("ascii")
     sha256 = hashlib.sha256(raw).hexdigest()
 
-    # Written as a single python3 invocation; base64 payload contains only
-    # [A-Za-z0-9+/=], which cannot break shell quoting.
+    # Single environment.exec() round-trip: try python3 first (existing,
+    # widely-compatible behavior), fall back to POSIX `base64 -d` (part of
+    # coreutils, present in far more minimal containers than python3) if
+    # python3 isn't installed, and fail loudly with a clear message if
+    # neither tool exists. Doing the python3/base64 probe with `command -v`
+    # inside ONE shell command (instead of probing first and writing second)
+    # avoids paying for an extra exec()/turn round-trip.
+    #
+    # Bug this fixes: some task containers (e.g. configure-git-webserver)
+    # are minimal and have no python3 at all, so every write_file call used
+    # to fail with exit 127 and no explanation reached the model — see
+    # jobs/2026-09-13__20-35-57/configure-git-webserver__PoxXkF8/result.json.
     write_cmd = (
+        "if command -v python3 >/dev/null 2>&1; then "
         f"python3 -c \"import base64,pathlib; "
-        f"p = pathlib.Path({path!r}); p.parent.mkdir(parents=True, exist_ok=True); "
-        f"p.write_bytes(base64.b64decode('{b64}'))\" "
-        f"&& echo WRITE_OK"
+        f"p = pathlib.Path(base64.b64decode('{path_b64}').decode('utf-8')); "
+        f"p.parent.mkdir(parents=True, exist_ok=True); "
+        f"p.write_bytes(base64.b64decode('{b64}'))\" && echo WRITE_OK; "
+        "elif command -v base64 >/dev/null 2>&1; then "
+        f"__wf_path=\"$(printf '%s' '{path_b64}' | base64 -d)\" && "
+        "mkdir -p \"$(dirname \"$__wf_path\")\" && "
+        f"printf '%s' '{b64}' | base64 -d > \"$__wf_path\" && echo WRITE_OK; "
+        "else "
+        "echo 'no python3 or base64 available in container' >&2; exit 127; "
+        "fi"
     )
 
     try:
