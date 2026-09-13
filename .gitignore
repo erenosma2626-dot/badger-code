@@ -28,3 +28,4 @@ jobs/
 
 # OS junk
 .DS_Store
+.agy-relay/
