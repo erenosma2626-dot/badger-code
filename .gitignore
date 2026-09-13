@@ -1,0 +1,21 @@
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+
+# Reference-only clone (has its own git history, not part of this repo)
+reference-starter-repo/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node (if LangChain tooling needs it)
+node_modules/
+
+# Harbor run artifacts
+jobs/
+
+# OS junk
+.DS_Store
