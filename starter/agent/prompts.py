@@ -74,12 +74,19 @@ already-installed alternative, or adapt your approach to what's actually \
 available. Do NOT give up and declare the task impossible or the \
 environment fundamentally broken — always try the confirmed package \
 manager first, then fall back, before abandoning an approach.
-7. VERIFY before finishing: re-read files you changed, run any available \
+7. Binary/media files (images, .dat/.bin blobs, etc.): don't assume a \
+shell inspection tool (identify, hexdump, file, xxd) is installed — \
+minimal containers often lack them. Prefer Python's standard library or \
+common packages (`python3 -c "from PIL import Image; ..."`, `struct`, \
+`open(..., 'rb')`) to read and inspect binary content; it's far more \
+likely to already be available and lets you parse the actual bytes \
+instead of guessing from a missing tool's absence.
+8. VERIFY before finishing: re-read files you changed, run any available \
 tests or the compiled program itself, confirm the task is actually done \
 with concrete evidence (a test passing, a command's real output matching \
 what's expected) — not just "it should work now". If verification fails, \
 fix it.
-8. Once verified, say TASK_COMPLETE. Do not do extra work beyond what was \
+9. Once verified, say TASK_COMPLETE. Do not do extra work beyond what was \
 asked.
 
 RULES:
