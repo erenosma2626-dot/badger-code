@@ -75,6 +75,7 @@ Environment variables
 """
 
 from collections import deque
+import json
 import os
 
 from harbor.agents.base import BaseAgent
@@ -85,10 +86,16 @@ from agent.llm import LLMClient
 from agent.prompts import (
     COMPLETION_EVIDENCE_MESSAGE,
     NUDGE_MESSAGE,
+    STRUCTURED_NUDGE_MESSAGE,
+    STRUCTURED_SYSTEM_PROMPT,
     STUCK_LOOP_MESSAGE,
     SYSTEM_PROMPT,
     observation_message,
 )
+from agent.structured_tools import TOOL_SCHEMAS
+from agent.structured_tools import read_file as structured_read_file
+from agent.structured_tools import terminal_exec as structured_terminal_exec
+from agent.structured_tools import write_file as structured_write_file
 from agent.tools import (
     classify_command,
     output_hash,
@@ -351,3 +358,176 @@ class BaselineAgent(BaseAgent):
             termination_reason = "max_turns"
         context.metadata["termination_reason"] = termination_reason
         context.metadata["verification_status"] = compute_verification_status()
+
+
+class StructuredToolAgent(BaseAgent):
+    """A ReAct agent using native tool-calling (terminal_exec, write_file,
+    read_file, task_complete — see agent/structured_tools.py) instead of
+    markdown-fence text parsing. This is the "next target architecture"
+    from docs/plan.md's second mermaid diagram: it structurally eliminates
+    the "TASK_COMPLETE / free text sent as a literal command" bug class
+    (tools.py's CODE_BLOCK_RE fix mitigates it for the text-based agent;
+    this removes the failure mode entirely by having the API itself parse
+    the model's intent, not a regex).
+
+    Requires an LLM endpoint that supports OpenAI-style function-calling
+    (Nebius does). Falls back to nudging, same as BaselineAgent, if the
+    model responds with no tool call.
+    """
+
+    @staticmethod
+    def name() -> str:
+        return "mlm26-structured-tools"
+
+    def version(self) -> str | None:
+        return "0.3.0"
+
+    async def setup(self, environment: BaseEnvironment) -> None:
+        pass
+
+    async def run(
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
+    ) -> None:
+        llm = LLMClient(model_name=self.model_name)
+
+        bootstrap_observation = await run_shell(
+            environment, BOOTSTRAP_COMMAND, timeout_sec=COMMAND_TIMEOUT_SEC
+        )
+        augmented_instruction = (
+            f"{instruction}\n\n"
+            f"Automatic environment snapshot (pwd, current directory listing, "
+            f"OS, and available tools) — inspect it before acting:\n"
+            f"{bootstrap_observation}"
+        )
+
+        messages = [
+            {"role": "system", "content": STRUCTURED_SYSTEM_PROMPT},
+            {"role": "user", "content": augmented_instruction},
+        ]
+
+        n_input = 0
+        n_output = 0
+        turns = 0
+        finished = False
+        termination_reason: str | None = None
+
+        for _ in range(MAX_TURNS):
+            turns += 1
+
+            text, tool_calls, usage = await llm.chat_tools(messages, TOOL_SCHEMAS)
+            n_input += usage.get("prompt_tokens", 0)
+            n_output += usage.get("completion_tokens", 0)
+
+            context.n_input_tokens = n_input
+            context.n_output_tokens = n_output
+            context.metadata = {
+                "turns": turns,
+                "finished": finished,
+                "messages": messages,
+                "termination_reason": termination_reason,
+            }
+
+            # Native tool-calling assistant messages must carry the raw
+            # tool_calls structure (id/name/arguments) for the API to
+            # accept the following tool-role reply, not just plain text.
+            assistant_msg: dict = {"role": "assistant", "content": text}
+            if tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": json.dumps(call["arguments"]),
+                        },
+                    }
+                    for call in tool_calls
+                ]
+            messages.append(assistant_msg)
+
+            if not tool_calls:
+                messages.append(
+                    {"role": "user", "content": STRUCTURED_NUDGE_MESSAGE}
+                )
+                continue
+
+            # Exactly one tool call per turn by prompt contract; if the
+            # model sends more, only the first is executed and the rest
+            # are acknowledged as skipped so the tool-call/tool-reply
+            # pairing the API requires stays intact.
+            call = tool_calls[0]
+            name = call["name"]
+            args = call["arguments"]
+
+            if name == "task_complete":
+                finished = True
+                termination_reason = "task_complete"
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": json.dumps(
+                            {"acknowledged": True, "evidence": args.get("evidence", "")}
+                        ),
+                    }
+                )
+                context.metadata["finished"] = True
+                context.metadata["termination_reason"] = termination_reason
+                break
+
+            if name == "terminal_exec":
+                receipt = await structured_terminal_exec(
+                    environment, args.get("command", ""), timeout_sec=COMMAND_TIMEOUT_SEC
+                )
+            elif name == "write_file":
+                receipt = await structured_write_file(
+                    environment,
+                    args.get("path", ""),
+                    args.get("content", ""),
+                    timeout_sec=COMMAND_TIMEOUT_SEC,
+                )
+            elif name == "read_file":
+                receipt = await structured_read_file(
+                    environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
+                )
+            else:
+                receipt_dict = {"error": f"unknown tool: {name}"}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": json.dumps(receipt_dict),
+                    }
+                )
+                for extra in tool_calls[1:]:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": extra["id"],
+                            "content": json.dumps({"skipped": True}),
+                        }
+                    )
+                continue
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": json.dumps(receipt.to_dict()),
+                }
+            )
+            for extra in tool_calls[1:]:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": extra["id"],
+                        "content": json.dumps({"skipped": True}),
+                    }
+                )
+
+        if termination_reason is None:
+            termination_reason = "max_turns"
+        context.metadata["termination_reason"] = termination_reason
