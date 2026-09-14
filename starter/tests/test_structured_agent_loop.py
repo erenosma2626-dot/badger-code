@@ -77,3 +77,44 @@ def test_structured_agent_reaches_task_complete_and_records_evidence(monkeypatch
     # The terminal_exec call's receipt must have been fed back as a tool message.
     tool_msgs = [m for m in ctx.metadata["messages"] if m.get("role") == "tool"]
     assert any("exit_code" in m["content"] for m in tool_msgs)
+
+
+class FakeLLMAlwaysEmpty:
+    """Never calls a tool; used to check that the rejected raw content is
+    logged (docs/v0.4-diagnosis-toolcall.md), not silently dropped."""
+
+    def __init__(self, model_name=None):
+        self.calls = 0
+
+    async def chat_tools(self, messages, tools):
+        self.calls += 1
+        return (
+            'I will call write_file with path=/app/main.c now.',
+            [],
+            {"prompt_tokens": 5, "completion_tokens": 2, "finish_reason": "length"},
+        )
+
+
+def test_structured_agent_logs_raw_content_when_no_tool_call_is_recognized(
+    monkeypatch, caplog
+):
+    import logging
+    import pathlib
+
+    import agent.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "LLMClient", FakeLLMAlwaysEmpty)
+    monkeypatch.setattr(agent_module, "MAX_TURNS", 2)
+
+    sut = StructuredToolAgent(logs_dir=pathlib.Path("/tmp"), model_name="fake-model")
+    sut.logger = logging.getLogger("test-structured-agent")
+    ctx = FakeContext()
+
+    with caplog.at_level(logging.WARNING, logger="test-structured-agent"):
+        asyncio.run(sut.run("do the thing", FakeEnvironment(), ctx))
+
+    assert any(
+        "write_file with path=/app/main.c" in record.getMessage()
+        and "finish_reason=length" in record.getMessage()
+        for record in caplog.records
+    )

@@ -449,6 +449,20 @@ class StructuredToolAgent(BaseAgent):
             messages.append(assistant_msg)
 
             if not tool_calls:
+                # Observability for the tool-call parser mismatch (see
+                # docs/v0.4-diagnosis-toolcall.md): before this, a rejected
+                # response only produced "you didn't call a tool" — the raw
+                # content the model actually sent was never surfaced
+                # anywhere, so a persistent parser/format mismatch (e.g. a
+                # max_tokens-truncated tool-call payload) was indistinguishable
+                # from the model simply narrating. Log it in full every time.
+                self.logger.warning(
+                    "turn %d: model response had no recognized tool_calls "
+                    "(finish_reason=%s); raw content: %r",
+                    turns,
+                    usage.get("finish_reason"),
+                    text,
+                )
                 messages.append(
                     {"role": "user", "content": STRUCTURED_NUDGE_MESSAGE}
                 )
