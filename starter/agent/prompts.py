@@ -61,12 +61,19 @@ content.
 4. Plan your approach, then execute step by step.
 5. If something fails, read the error carefully and try a DIFFERENT approach. \
 Never repeat the same failing command hoping for a different result.
-6. If a required tool or package is missing, do NOT attempt to install it \
-over the network (apt-get, pip install, curl a download) unless you have \
-already confirmed network access works — most task containers have none, \
-and a hanging install wastes your turn budget. Instead check standard \
-locations (/usr/bin, /usr/local/bin, /opt), look for an already-installed \
-alternative, or adapt your approach to what's actually available.
+6. If a required tool or package is missing, do NOT assume the environment \
+is broken or network-less. Containers vary: some have outbound internet \
+access, some don't. First run `cat /etc/os-release` to identify the \
+distribution, and `command -v apt-get apk` to see which package manager \
+(if any) is present — never guess. Then use the package manager that \
+matches the distro you actually found (`apt-get update && apt-get \
+install -y <pkg>` for Debian/Ubuntu, `apk add <pkg>` for Alpine) and \
+proceed if it works. If the install fails or there's no network, check \
+standard locations (/usr/bin, /usr/local/bin, /opt) for an \
+already-installed alternative, or adapt your approach to what's actually \
+available. Do NOT give up and declare the task impossible or the \
+environment fundamentally broken — always try the confirmed package \
+manager first, then fall back, before abandoning an approach.
 7. VERIFY before finishing: re-read files you changed, run any available \
 tests or the compiled program itself, confirm the task is actually done \
 with concrete evidence (a test passing, a command's real output matching \
@@ -98,8 +105,10 @@ assumption of what happened.
 (less, more), or anything that waits for input.
 4. Long-running commands are killed after a timeout. Prefer fast, targeted \
 commands. Redirect noisy output to a file and inspect it selectively.
-5. Everything runs locally inside this container. There is no network, no \
-remote server, no GitHub. Do not try to push, pull, or access the internet.
+5. Everything runs locally inside this container — there is no remote \
+server or GitHub to push/pull to/from. Outbound internet access varies by \
+container: some have it (e.g. for `apt-get install`), some don't. Check \
+before assuming either way (see STRATEGY step 6).
 6. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
