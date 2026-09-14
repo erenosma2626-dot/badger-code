@@ -86,10 +86,12 @@ from agent.llm import LLMClient
 from agent.prompts import (
     COMPLETION_EVIDENCE_MESSAGE,
     NUDGE_MESSAGE,
+    STRUCTURED_COMPLETION_EVIDENCE_MESSAGE,
     STRUCTURED_NUDGE_MESSAGE,
     STRUCTURED_SYSTEM_PROMPT,
     STUCK_LOOP_MESSAGE,
     SYSTEM_PROMPT,
+    TARGET_STUCK_LOOP_MESSAGE,
     observation_message,
 )
 from agent.structured_tools import TOOL_SCHEMAS
@@ -98,6 +100,8 @@ from agent.structured_tools import terminal_exec as structured_terminal_exec
 from agent.structured_tools import write_file as structured_write_file
 from agent.tools import (
     classify_command,
+    extract_target,
+    is_unproductive_attempt,
     output_hash,
     parse_action,
     run_shell,
@@ -111,6 +115,7 @@ STUCK_LOOP_THRESHOLD = 3
 
 BOOTSTRAP_COMMAND = (
     "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null "
+    "&& echo --- && find /app -type f 2>/dev/null | head -200 "
     "&& echo --- && cat /etc/os-release 2>/dev/null | grep PRETTY_NAME "
     "&& echo --- && command -v apt-get apk git python3"
 )
@@ -121,7 +126,15 @@ answer without ever looking at the task's input files. Also surfaces the
 OS identity and available package manager/tools up front, so the model
 never has to guess it (see docs/agy-rootcause-git-apk.md: the agent
 assumed an Alpine container and tried `apk` when the real container was
-Ubuntu with `apt-get` available all along)."""
+Ubuntu with `apt-get` available all along).
+
+§2.2 (v0.4 spec): the top-level `ls -la /app` alone wasn't enough — the
+log-summary/Structured trial (docs/plan.md) only read the 3 files it
+happened to notice in a shallow listing and never discovered the rest of
+`/app/logs`. The `find /app -type f` line gives a FULL recursive listing
+of every file in the task directory up front, so the model can't miss
+input it never thought to look for (capped at 200 paths so a huge task
+tree doesn't blow the first message's token budget)."""
 
 
 class BaselineAgent(BaseAgent):
@@ -211,10 +224,23 @@ class BaselineAgent(BaseAgent):
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         stuck_nudged = False
 
+        # §2.3 (v0.4 spec) — same-target stuck-loop: N unproductive
+        # attempts against the SAME extracted target (file/path), even if
+        # the command text differs each time (a varying grep pattern
+        # against the same file that never reads it directly, etc.).
+        target_attempt_counts: dict[str, int] = {}
+
         has_edited = False
         pending_verification = False
         had_successful_test_after_edit = False
         completion_evidence_nudged = False
+        # §2.1 (v0.4 spec, tightened) — whether any genuine tool-call
+        # (write_file or a shell command, regardless of outcome) has
+        # happened since the completion-evidence nudge was sent. A second
+        # TASK_COMPLETE that arrives with this still False means the model
+        # just re-declared done from text alone — rejected hard, not
+        # nudged a third time (see the done-branch below).
+        action_since_nudge = False
 
         def compute_verification_status() -> str:
             if not has_edited:
@@ -256,13 +282,35 @@ class BaselineAgent(BaseAgent):
                     # anything actually verified the last edit? See the
                     # regex-log / log-summary-date-ranges / polyglot-c-py
                     # trials in docs/plan.md — all three declared done with
-                    # zero evidence. This is a nudge, not a hard block: if
-                    # the model still says done afterward, we accept it.
+                    # zero evidence.
                     completion_evidence_nudged = True
+                    action_since_nudge = False
                     messages.append(
                         {"role": "user", "content": COMPLETION_EVIDENCE_MESSAGE}
                     )
                     continue
+
+                if pending_verification and not action_since_nudge:
+                    # §2.1 (tightened, v0.4 spec) — the log-summary-date-ranges
+                    # trial (docs/plan.md) showed the old one-nudge-then-
+                    # always-accept gate doesn't catch a "yüzeysel öz-doğrulama":
+                    # the model responding to the nudge with narrative alone
+                    # and re-declaring done, no new tool-call/receipt in
+                    # between. That is rejected HARD here — not nudged a
+                    # third time (no infinite-loop risk: this is a terminal
+                    # decision, not another retry).
+                    self.logger.warning(
+                        "turn %d: TASK_COMPLETE re-declared with no new "
+                        "tool-call since the completion-evidence nudge; "
+                        "rejecting hard",
+                        turns,
+                    )
+                    termination_reason = "completion_rejected_no_new_evidence"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata[
+                        "verification_status"
+                    ] = compute_verification_status()
+                    break
 
                 finished = True
                 termination_reason = "task_complete"
@@ -287,6 +335,7 @@ class BaselineAgent(BaseAgent):
                 has_edited = True
                 pending_verification = True
                 completion_evidence_nudged = False
+                action_since_nudge = True
 
                 fingerprint = observation.receipt.fingerprint()
                 recent_fingerprints.append(fingerprint)
@@ -303,6 +352,7 @@ class BaselineAgent(BaseAgent):
             observation = await run_shell(
                 environment, action.command, timeout_sec=COMMAND_TIMEOUT_SEC
             )
+            action_since_nudge = True
 
             fingerprint = (
                 *observation.receipt.fingerprint(),
@@ -311,16 +361,48 @@ class BaselineAgent(BaseAgent):
             repeat_count = sum(1 for f in recent_fingerprints if f == fingerprint)
             recent_fingerprints.append(fingerprint)
 
-            if repeat_count + 1 >= STUCK_LOOP_THRESHOLD:
+            # §2.3 — same-target detection: track unproductive attempts
+            # (non-zero exit or a "didn't find it" signal) against the same
+            # extracted target, independent of whether the command text
+            # itself repeats verbatim.
+            target = extract_target(action.command)
+            target_is_stuck = False
+            if target:
+                if is_unproductive_attempt(
+                    observation.receipt.exit_code, str(observation)
+                ):
+                    target_attempt_counts[target] = (
+                        target_attempt_counts.get(target, 0) + 1
+                    )
+                else:
+                    target_attempt_counts[target] = 0
+                target_is_stuck = (
+                    target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
+                )
+
+            exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+
+            if exact_repeat_stuck or target_is_stuck:
                 if not stuck_nudged:
                     stuck_nudged = True
-                    self.logger.warning(
-                        "turn %d: stuck loop detected (same command, exit "
-                        "code, and output %d times), sending nudge",
-                        turns,
-                        repeat_count + 1,
-                    )
-                    messages.append({"role": "user", "content": STUCK_LOOP_MESSAGE})
+                    if exact_repeat_stuck:
+                        self.logger.warning(
+                            "turn %d: stuck loop detected (same command, "
+                            "exit code, and output %d times), sending nudge",
+                            turns,
+                            repeat_count + 1,
+                        )
+                        nudge_content = STUCK_LOOP_MESSAGE
+                    else:
+                        self.logger.warning(
+                            "turn %d: stuck loop detected (%d unproductive "
+                            "attempts against target %r), sending nudge",
+                            turns,
+                            target_attempt_counts[target],
+                            target,
+                        )
+                        nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(target=target)
+                    messages.append({"role": "user", "content": nudge_content})
                     continue
                 else:
                     self.logger.warning(
@@ -414,6 +496,46 @@ class StructuredToolAgent(BaseAgent):
         finished = False
         termination_reason: str | None = None
 
+        # verification_status tracking (v0.4 spec §1.1 madde 1), derived
+        # from the receipt stream rather than BaselineAgent's shell-command
+        # classifier: write_file is unambiguously the only "edit" tool here,
+        # and any terminal_exec with exit_code=0 counts as verification
+        # (StructuredToolAgent has no separate edit/test/inspect split for
+        # shell commands the way tools.classify_command does for
+        # BaselineAgent's free-text bash blocks).
+        has_edited = False
+        pending_verification = False
+        had_successful_test_after_edit = False
+
+        def compute_verification_status() -> str:
+            if not has_edited:
+                return "not_applicable"
+            if not pending_verification:
+                return "passed"
+            if had_successful_test_after_edit:
+                return "stale"
+            return "missing"
+
+        # §1.1 madde 2 / §2.3 (v0.4 spec) — evidence-based stuck-loop
+        # detection, ported from BaselineAgent and applied to
+        # terminal_exec/read_file (write_file's success/failure is already
+        # covered by verification_status above). Two triggers, either one
+        # nudges once then hard-terminates on repeat, same as BaselineAgent:
+        # (a) exact repeat — same tool+command/path+exit_code+output_hash;
+        # (b) same-target — N unproductive attempts against the same
+        # extracted file/path even if the command text varies each turn.
+        recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
+        target_attempt_counts: dict[str, int] = {}
+        stuck_nudged = False
+
+        # §2.1 (tightened, v0.4 spec) — same completion-evidence gate as
+        # BaselineAgent: one nudge on the first task_complete while
+        # pending_verification, then a second task_complete is accepted
+        # ONLY if a genuine new tool call happened since the nudge; a bare
+        # re-declare is rejected hard (terminal decision, no third nudge).
+        completion_evidence_nudged = False
+        action_since_nudge = False
+
         for _ in range(MAX_TURNS):
             turns += 1
 
@@ -428,6 +550,7 @@ class StructuredToolAgent(BaseAgent):
                 "finished": finished,
                 "messages": messages,
                 "termination_reason": termination_reason,
+                "verification_status": compute_verification_status(),
             }
 
             # Native tool-calling assistant messages must carry the raw
@@ -449,6 +572,20 @@ class StructuredToolAgent(BaseAgent):
             messages.append(assistant_msg)
 
             if not tool_calls:
+                # Observability for the tool-call parser mismatch (see
+                # docs/v0.4-diagnosis-toolcall.md): before this, a rejected
+                # response only produced "you didn't call a tool" — the raw
+                # content the model actually sent was never surfaced
+                # anywhere, so a persistent parser/format mismatch (e.g. a
+                # max_tokens-truncated tool-call payload) was indistinguishable
+                # from the model simply narrating. Log it in full every time.
+                self.logger.warning(
+                    "turn %d: model response had no recognized tool_calls "
+                    "(finish_reason=%s); raw content: %r",
+                    turns,
+                    usage.get("finish_reason"),
+                    text,
+                )
                 messages.append(
                     {"role": "user", "content": STRUCTURED_NUDGE_MESSAGE}
                 )
@@ -463,6 +600,55 @@ class StructuredToolAgent(BaseAgent):
             args = call["arguments"]
 
             if name == "task_complete":
+                if pending_verification and not completion_evidence_nudged:
+                    # §2.1 — one nudge before accepting completion; see
+                    # BaselineAgent's identical gate for the trials this
+                    # addresses (docs/plan.md).
+                    completion_evidence_nudged = True
+                    action_since_nudge = False
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(
+                                {"acknowledged": False, "reason": "insufficient evidence"}
+                            ),
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": STRUCTURED_COMPLETION_EVIDENCE_MESSAGE,
+                        }
+                    )
+                    continue
+
+                if pending_verification and not action_since_nudge:
+                    # §2.1 (tightened) — a second task_complete with no new
+                    # tool call since the nudge is rejected HARD, not
+                    # nudged a third time (no infinite-loop risk).
+                    self.logger.warning(
+                        "turn %d: task_complete re-declared with no new "
+                        "tool call since the completion-evidence nudge; "
+                        "rejecting hard",
+                        turns,
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(
+                                {"acknowledged": False, "reason": "insufficient evidence"}
+                            ),
+                        }
+                    )
+                    termination_reason = "completion_rejected_no_new_evidence"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata[
+                        "verification_status"
+                    ] = compute_verification_status()
+                    break
+
                 finished = True
                 termination_reason = "task_complete"
                 messages.append(
@@ -476,12 +662,17 @@ class StructuredToolAgent(BaseAgent):
                 )
                 context.metadata["finished"] = True
                 context.metadata["termination_reason"] = termination_reason
+                context.metadata["verification_status"] = compute_verification_status()
                 break
 
             if name == "terminal_exec":
                 receipt = await structured_terminal_exec(
                     environment, args.get("command", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                action_since_nudge = True
+                if has_edited and receipt.exit_code == 0:
+                    pending_verification = False
+                    had_successful_test_after_edit = True
             elif name == "write_file":
                 receipt = await structured_write_file(
                     environment,
@@ -489,10 +680,15 @@ class StructuredToolAgent(BaseAgent):
                     args.get("content", ""),
                     timeout_sec=COMMAND_TIMEOUT_SEC,
                 )
+                has_edited = True
+                pending_verification = True
+                completion_evidence_nudged = False
+                action_since_nudge = True
             elif name == "read_file":
                 receipt = await structured_read_file(
                     environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                action_since_nudge = True
             else:
                 receipt_dict = {"error": f"unknown tool: {name}"}
                 messages.append(
@@ -528,6 +724,79 @@ class StructuredToolAgent(BaseAgent):
                     }
                 )
 
+            if name in ("terminal_exec", "read_file"):
+                command_or_path = (
+                    args.get("command", "") if name == "terminal_exec"
+                    else args.get("path", "")
+                )
+                combined_output = receipt.stdout_tail + receipt.stderr_tail
+                fingerprint = (
+                    name,
+                    command_or_path,
+                    receipt.exit_code,
+                    output_hash(combined_output),
+                )
+                repeat_count = sum(1 for f in recent_fingerprints if f == fingerprint)
+                recent_fingerprints.append(fingerprint)
+
+                target = (
+                    command_or_path if name == "read_file"
+                    else extract_target(command_or_path)
+                )
+                target_is_stuck = False
+                if target:
+                    if is_unproductive_attempt(receipt.exit_code, combined_output):
+                        target_attempt_counts[target] = (
+                            target_attempt_counts.get(target, 0) + 1
+                        )
+                    else:
+                        target_attempt_counts[target] = 0
+                    target_is_stuck = (
+                        target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
+                    )
+
+                exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+
+                if exact_repeat_stuck or target_is_stuck:
+                    if not stuck_nudged:
+                        stuck_nudged = True
+                        if exact_repeat_stuck:
+                            self.logger.warning(
+                                "turn %d: stuck loop detected (same %s, "
+                                "exit code, and output %d times), sending "
+                                "nudge",
+                                turns,
+                                name,
+                                repeat_count + 1,
+                            )
+                            nudge_content = STUCK_LOOP_MESSAGE
+                        else:
+                            self.logger.warning(
+                                "turn %d: stuck loop detected (%d "
+                                "unproductive attempts against target %r), "
+                                "sending nudge",
+                                turns,
+                                target_attempt_counts[target],
+                                target,
+                            )
+                            nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(
+                                target=target
+                            )
+                        messages.append({"role": "user", "content": nudge_content})
+                    else:
+                        self.logger.warning(
+                            "turn %d: stuck loop repeated after nudge, "
+                            "terminating",
+                            turns,
+                        )
+                        termination_reason = "stuck_loop_detected"
+                        context.metadata["termination_reason"] = termination_reason
+                        context.metadata[
+                            "verification_status"
+                        ] = compute_verification_status()
+                        break
+
         if termination_reason is None:
             termination_reason = "max_turns"
         context.metadata["termination_reason"] = termination_reason
+        context.metadata["verification_status"] = compute_verification_status()

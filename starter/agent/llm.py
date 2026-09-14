@@ -182,7 +182,24 @@ class LLMClient:
             - **tool_calls** — list of ``{"id", "name", "arguments"}`` dicts,
               ``arguments`` already JSON-decoded into a dict (empty list if
               the model didn't call a tool).
-            - **usage** — same shape as ``chat()``.
+            - **usage** — same shape as ``chat()``, plus a ``finish_reason``
+              key (see below) whenever the response provides one.
+
+        Diagnosing rejected tool calls (docs/v0.4-diagnosis-toolcall.md)
+        ==================================================================
+        When ``tool_calls`` comes back empty even though the model clearly
+        intended to call a tool (its narration reads like a write_file
+        request, or the raw content contains a tool-call-shaped JSON blob),
+        the caller needs to see what the model actually sent, not just the
+        fact that we rejected it. ``usage["finish_reason"]`` is included for
+        exactly this: ``"length"`` means the completion was cut off by
+        ``max_tokens`` before it finished — a strong, checkable explanation
+        for why a native tool-call block can come back malformed/empty (a
+        truncated JSON payload never closes its tool-call wrapper, so the
+        server-side parser has nothing valid to extract and silently falls
+        back to plain content). The caller (StructuredToolAgent) logs
+        ``text`` in full whenever ``tool_calls`` is empty, specifically so
+        this raw, previously-invisible content is captured going forward.
         """
         import json
 
@@ -213,4 +230,7 @@ class LLMClient:
                 "prompt_tokens": response.usage.prompt_tokens or 0,
                 "completion_tokens": response.usage.completion_tokens or 0,
             }
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if finish_reason is not None:
+            usage["finish_reason"] = finish_reason
         return text, tool_calls, usage

@@ -116,7 +116,12 @@ commands. Redirect noisy output to a file and inspect it selectively.
 server or GitHub to push/pull to/from. Outbound internet access varies by \
 container: some have it (e.g. for `apt-get install`), some don't. Check \
 before assuming either way (see STRATEGY step 6).
-6. When the task is fully complete, respond with exactly the following, \
+6. Each command you run is a SEPARATE shell invocation — a `cd` in one \
+turn does not persist to the next turn; you start back wherever the \
+container's default working directory is. If you need to operate in a \
+different directory, either chain it in the SAME command (`cd X && Y`) \
+or use absolute paths instead of relying on a previous `cd`.
+7. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -135,6 +140,15 @@ You just ran the same command with the same exit code and the same output \
 as before — repeating it again will not change the outcome. Try a \
 DIFFERENT approach: read the actual error message, inspect the current \
 file/directory state, or reconsider your assumption about why it's failing.\
+"""
+
+TARGET_STUCK_LOOP_MESSAGE = """\
+Your last several attempts targeting {target} have not gotten you \
+anywhere (failed, or came back with no useful result) — repeating this \
+approach on the same target will not change the outcome. Try a \
+DIFFERENT strategy: for example, read the file start-to-end instead of \
+guessing at a partial search, or reconsider whether \
+{target} is even the right target for what you're looking for.\
 """
 
 COMPLETION_EVIDENCE_MESSAGE = """\
@@ -183,12 +197,24 @@ ONE tool per turn. Every tool call returns a deterministic receipt
 (exit_code, cwd_after, stdout_tail/stderr_tail, changed_paths) — trust it
 over your own assumption of what happened. Commands run non-interactively;
 never use editors or pagers. Long-running commands are killed after a
-timeout — prefer fast, targeted commands.
+timeout — prefer fast, targeted commands. Each terminal_exec call is a
+SEPARATE shell invocation — a `cd` in one call does not persist to the
+next one; if you need a different working directory, chain it in the SAME
+command (`cd X && Y`) or use absolute paths.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
 Your last response didn't call any of the four tools (terminal_exec, \
 write_file, read_file, task_complete). Call exactly one of them now.\
+"""
+
+STRUCTURED_COMPLETION_EVIDENCE_MESSAGE = """\
+You're declaring the task complete, but nothing since your last write_file \
+call has verified it worked (no terminal_exec/read_file since). Before \
+finishing: call terminal_exec or read_file NOW to check your work — a \
+text explanation alone will not be accepted as evidence. If you declare \
+task_complete again without a new tool call in between, it will be \
+rejected outright.\
 """
 
 

@@ -101,6 +101,29 @@ def test_chat_tools_survives_malformed_json_arguments():
     assert tool_calls == [{"id": "call_1", "name": "task_complete", "arguments": {}}]
 
 
+def test_chat_tools_surfaces_finish_reason_for_diagnosing_rejected_tool_calls():
+    """docs/v0.4-diagnosis-toolcall.md: a completion cut off by max_tokens
+    (finish_reason="length") is a strong, checkable explanation for a
+    malformed/empty tool call — the caller needs this signal, not just the
+    fact that tool_calls came back empty."""
+    message = FakeMessage(content="partial tool call json that never clos", tool_calls=[])
+    client = _client_with(message)
+    completions = client._completions
+    original_create = completions.create
+
+    async def create_with_finish_reason(**kwargs):
+        response = await original_create(**kwargs)
+        response.choices[0].finish_reason = "length"
+        return response
+
+    completions.create = create_with_finish_reason
+
+    text, tool_calls, usage = asyncio.run(client.chat_tools([], tools=[]))
+
+    assert tool_calls == []
+    assert usage["finish_reason"] == "length"
+
+
 def test_chat_tools_passes_tools_and_tool_choice_auto_to_the_api():
     message = FakeMessage(content="", tool_calls=[])
     client = _client_with(message)

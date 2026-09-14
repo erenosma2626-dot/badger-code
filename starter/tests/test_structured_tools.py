@@ -8,6 +8,7 @@ tests/test_tools_write_file.py — never talks to a real container.
 import asyncio
 import base64
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from agent.structured_tools import (
     TOOL_SCHEMAS,
@@ -87,6 +88,26 @@ def test_write_file_does_not_leak_dangerous_path_into_command():
     assert dangerous not in env.last_command
 
 
+def test_write_file_has_python3_base64_fallback_chain():
+    """§1.1 madde 3 (v0.4 spec): structured_tools.write_file must have the
+    same command -v python3 / command -v base64 probe chain as
+    tools.run_write_file, so containers without python3 (e.g.
+    configure-git-webserver, see docs/plan.md) don't fail with an
+    unexplained exit 127 when StructuredToolAgent is the only agent left."""
+    env = FakeEnvironment(stdout="WRITE_OK\n", return_code=0)
+    asyncio.run(write_file(env, "/tmp/example.txt", "hello world", timeout_sec=30))
+
+    cmd = env.last_command
+    assert "command -v python3" in cmd, "must probe for python3 before assuming it exists"
+    assert "command -v base64" in cmd, "must probe for base64 before assuming it exists"
+    assert "base64 -d" in cmd or "base64 --decode" in cmd, (
+        "must have a base64(1)-based fallback for containers without python3"
+    )
+    assert "no python3 or base64 available" in cmd, (
+        "must fail loudly with a clear message if neither tool exists"
+    )
+
+
 def test_read_file_decodes_base64_roundtrip():
     content = "line1\nline2 café\n"
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
@@ -102,3 +123,75 @@ def test_read_file_reports_failure_on_nonzero_exit():
     receipt = asyncio.run(read_file(env, "/tmp/missing.txt", timeout_sec=30))
     assert receipt.exit_code == 1
     assert "No such file" in receipt.stderr_tail
+
+
+class _RealBashInMinimalPathEnvironment:
+    """Actually runs the generated command via a real shell, but with PATH
+    restricted so specific tools appear "not installed" — a genuine
+    simulation of a minimal container (§1.1 madde 3), not just a canned
+    fake response. Only `only_tool` (a directory containing exactly the
+    binaries to keep, e.g. a symlink farm) is exposed via PATH; everything
+    else, including python3, is invisible to `command -v`."""
+
+    def __init__(self, path: str):
+        self._path = path
+
+    async def exec(self, command: str, timeout_sec: int):
+        import subprocess
+
+        result = subprocess.run(
+            ["/bin/sh", "-c", command],
+            env={"PATH": self._path},
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+        return SimpleNamespace(
+            stdout=result.stdout, stderr=result.stderr, return_code=result.returncode
+        )
+
+
+def _minimal_path_with_only(tmp_path, keep: list[str]) -> str:
+    """Build a directory containing symlinks only for the binaries in
+    `keep` (resolved from the real PATH), so a `command -v X` inside the
+    restricted PATH only succeeds for those tools."""
+    import shutil
+
+    bin_dir = tmp_path / "minimal_bin"
+    bin_dir.mkdir()
+    for tool in keep:
+        real = shutil.which(tool)
+        assert real is not None, f"test host must have {tool} installed"
+        (bin_dir / tool).symlink_to(real)
+    return str(bin_dir)
+
+
+def test_write_file_falls_back_to_base64_when_python3_is_absent(tmp_path):
+    """§1.1 madde 3: a container with base64/sh but no python3 must still
+    succeed via the fallback branch, not fail with an unexplained exit 127
+    (the exact regression this checklist item exists to prevent, see
+    docs/plan.md's configure-git-webserver trial)."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "mkdir", "dirname", "printf"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "out" / "written.txt"
+
+    receipt = asyncio.run(
+        write_file(env, str(target), "hello from minimal env\n", timeout_sec=10)
+    )
+
+    assert receipt.exit_code == 0
+    assert target.read_text() == "hello from minimal env\n"
+
+
+def test_write_file_fails_loudly_when_neither_python3_nor_base64_exist(tmp_path):
+    """§1.1 madde 3: with neither tool available, the command must exit
+    non-zero with the explicit error message, not silently do nothing."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "mkdir", "dirname"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "out" / "written.txt"
+
+    receipt = asyncio.run(write_file(env, str(target), "x", timeout_sec=10))
+
+    assert receipt.exit_code == 127
+    assert "no python3 or base64 available" in receipt.stderr_tail
+    assert not target.exists()
