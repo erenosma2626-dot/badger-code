@@ -115,6 +115,7 @@ STUCK_LOOP_THRESHOLD = 3
 
 BOOTSTRAP_COMMAND = (
     "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null "
+    "&& echo --- && find /app -type f 2>/dev/null | head -200 "
     "&& echo --- && cat /etc/os-release 2>/dev/null | grep PRETTY_NAME "
     "&& echo --- && command -v apt-get apk git python3"
 )
@@ -125,7 +126,15 @@ answer without ever looking at the task's input files. Also surfaces the
 OS identity and available package manager/tools up front, so the model
 never has to guess it (see docs/agy-rootcause-git-apk.md: the agent
 assumed an Alpine container and tried `apk` when the real container was
-Ubuntu with `apt-get` available all along)."""
+Ubuntu with `apt-get` available all along).
+
+§2.2 (v0.4 spec): the top-level `ls -la /app` alone wasn't enough — the
+log-summary/Structured trial (docs/plan.md) only read the 3 files it
+happened to notice in a shallow listing and never discovered the rest of
+`/app/logs`. The `find /app -type f` line gives a FULL recursive listing
+of every file in the task directory up front, so the model can't miss
+input it never thought to look for (capped at 200 paths so a huge task
+tree doesn't blow the first message's token budget)."""
 
 
 class BaselineAgent(BaseAgent):

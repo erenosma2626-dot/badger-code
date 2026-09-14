@@ -116,7 +116,12 @@ commands. Redirect noisy output to a file and inspect it selectively.
 server or GitHub to push/pull to/from. Outbound internet access varies by \
 container: some have it (e.g. for `apt-get install`), some don't. Check \
 before assuming either way (see STRATEGY step 6).
-6. When the task is fully complete, respond with exactly the following, \
+6. Each command you run is a SEPARATE shell invocation — a `cd` in one \
+turn does not persist to the next turn; you start back wherever the \
+container's default working directory is. If you need to operate in a \
+different directory, either chain it in the SAME command (`cd X && Y`) \
+or use absolute paths instead of relying on a previous `cd`.
+7. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -192,7 +197,10 @@ ONE tool per turn. Every tool call returns a deterministic receipt
 (exit_code, cwd_after, stdout_tail/stderr_tail, changed_paths) — trust it
 over your own assumption of what happened. Commands run non-interactively;
 never use editors or pagers. Long-running commands are killed after a
-timeout — prefer fast, targeted commands.
+timeout — prefer fast, targeted commands. Each terminal_exec call is a
+SEPARATE shell invocation — a `cd` in one call does not persist to the
+next one; if you need a different working directory, chain it in the SAME
+command (`cd X && Y`) or use absolute paths.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
