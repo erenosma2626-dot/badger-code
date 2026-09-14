@@ -102,11 +102,19 @@ COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
 STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
 STUCK_LOOP_THRESHOLD = 3
 
-BOOTSTRAP_COMMAND = "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null"
+BOOTSTRAP_COMMAND = (
+    "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null "
+    "&& echo --- && cat /etc/os-release 2>/dev/null | grep PRETTY_NAME "
+    "&& echo --- && command -v apt-get apk git python3"
+)
 """Run once, before turn 1, so the model sees the actual working directory
 and file layout before it does anything else. Motivated by the
 chess-best-move trial (docs/plan.md), where the agent wrote a hardcoded
-answer without ever looking at the task's input files."""
+answer without ever looking at the task's input files. Also surfaces the
+OS identity and available package manager/tools up front, so the model
+never has to guess it (see docs/agy-rootcause-git-apk.md: the agent
+assumed an Alpine container and tried `apk` when the real container was
+Ubuntu with `apt-get` available all along)."""
 
 
 class BaselineAgent(BaseAgent):
