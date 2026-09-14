@@ -470,6 +470,50 @@ async def run_write_file(
     return ShellObservation(text, receipt)
 
 
+_TARGET_PATH_RE = re.compile(r"(?:^|\s)([./\w-]*/[\w./-]+|\S+\.\w{1,6})(?=\s|$)")
+"""Best-effort match of a path-like token: either contains a `/` or ends in
+a short file-extension-shaped suffix. Not a full shell parser (see
+extract_target's docstring)."""
+
+_UNPRODUCTIVE_KEYWORDS = (
+    "no such file",
+    "not found",
+    "cannot access",
+    "command not found",
+    "is a directory",
+)
+"""Substrings (checked case-insensitively) that mean an inspection command
+technically ran (exit_code may even be 0, e.g. some `grep -q` invocations)
+but told the model nothing useful about the target it was after."""
+
+
+def extract_target(command_or_path: str) -> str | None:
+    """Best-effort extraction of the file/path a command appears to be
+    investigating (e.g. ``grep foo src/bar.py`` -> ``src/bar.py``), used
+    for the "same target, N unproductive attempts" stuck-loop signal
+    (v0.4 spec §2.3) — a broader trigger than exact-repeat detection: the
+    fix-code-vulnerability trial (docs/plan.md) showed a model varying its
+    grep pattern each time while still never reading the file it was
+    actually looking in.
+
+    Takes the LAST path-like token in the string (the target is usually
+    the final argument). Returns ``None`` if nothing path-like is found —
+    e.g. a bare `ls` or `pwd` has no single target to track.
+    """
+    matches = _TARGET_PATH_RE.findall(command_or_path)
+    return matches[-1] if matches else None
+
+
+def is_unproductive_attempt(exit_code: int | None, output_text: str) -> bool:
+    """True if an attempt against a target produced nothing useful: a
+    non-zero/unknown exit code, or output containing a "didn't find it"
+    signal even when the command technically exited 0."""
+    if exit_code not in (0, None):
+        return True
+    lowered = output_text.lower()
+    return any(kw in lowered for kw in _UNPRODUCTIVE_KEYWORDS)
+
+
 def output_hash(observation: str) -> str:
     """Short hash of an observation's text, used as part of the stuck-loop
     evidence fingerprint (see agent.py). Two runs of the same command with

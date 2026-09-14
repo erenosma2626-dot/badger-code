@@ -90,6 +90,7 @@ from agent.prompts import (
     STRUCTURED_SYSTEM_PROMPT,
     STUCK_LOOP_MESSAGE,
     SYSTEM_PROMPT,
+    TARGET_STUCK_LOOP_MESSAGE,
     observation_message,
 )
 from agent.structured_tools import TOOL_SCHEMAS
@@ -98,6 +99,8 @@ from agent.structured_tools import terminal_exec as structured_terminal_exec
 from agent.structured_tools import write_file as structured_write_file
 from agent.tools import (
     classify_command,
+    extract_target,
+    is_unproductive_attempt,
     output_hash,
     parse_action,
     run_shell,
@@ -211,6 +214,12 @@ class BaselineAgent(BaseAgent):
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         stuck_nudged = False
 
+        # §2.3 (v0.4 spec) — same-target stuck-loop: N unproductive
+        # attempts against the SAME extracted target (file/path), even if
+        # the command text differs each time (a varying grep pattern
+        # against the same file that never reads it directly, etc.).
+        target_attempt_counts: dict[str, int] = {}
+
         has_edited = False
         pending_verification = False
         had_successful_test_after_edit = False
@@ -311,16 +320,48 @@ class BaselineAgent(BaseAgent):
             repeat_count = sum(1 for f in recent_fingerprints if f == fingerprint)
             recent_fingerprints.append(fingerprint)
 
-            if repeat_count + 1 >= STUCK_LOOP_THRESHOLD:
+            # §2.3 — same-target detection: track unproductive attempts
+            # (non-zero exit or a "didn't find it" signal) against the same
+            # extracted target, independent of whether the command text
+            # itself repeats verbatim.
+            target = extract_target(action.command)
+            target_is_stuck = False
+            if target:
+                if is_unproductive_attempt(
+                    observation.receipt.exit_code, str(observation)
+                ):
+                    target_attempt_counts[target] = (
+                        target_attempt_counts.get(target, 0) + 1
+                    )
+                else:
+                    target_attempt_counts[target] = 0
+                target_is_stuck = (
+                    target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
+                )
+
+            exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+
+            if exact_repeat_stuck or target_is_stuck:
                 if not stuck_nudged:
                     stuck_nudged = True
-                    self.logger.warning(
-                        "turn %d: stuck loop detected (same command, exit "
-                        "code, and output %d times), sending nudge",
-                        turns,
-                        repeat_count + 1,
-                    )
-                    messages.append({"role": "user", "content": STUCK_LOOP_MESSAGE})
+                    if exact_repeat_stuck:
+                        self.logger.warning(
+                            "turn %d: stuck loop detected (same command, "
+                            "exit code, and output %d times), sending nudge",
+                            turns,
+                            repeat_count + 1,
+                        )
+                        nudge_content = STUCK_LOOP_MESSAGE
+                    else:
+                        self.logger.warning(
+                            "turn %d: stuck loop detected (%d unproductive "
+                            "attempts against target %r), sending nudge",
+                            turns,
+                            target_attempt_counts[target],
+                            target,
+                        )
+                        nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(target=target)
+                    messages.append({"role": "user", "content": nudge_content})
                     continue
                 else:
                     self.logger.warning(
@@ -433,6 +474,18 @@ class StructuredToolAgent(BaseAgent):
             if had_successful_test_after_edit:
                 return "stale"
             return "missing"
+
+        # §1.1 madde 2 / §2.3 (v0.4 spec) — evidence-based stuck-loop
+        # detection, ported from BaselineAgent and applied to
+        # terminal_exec/read_file (write_file's success/failure is already
+        # covered by verification_status above). Two triggers, either one
+        # nudges once then hard-terminates on repeat, same as BaselineAgent:
+        # (a) exact repeat — same tool+command/path+exit_code+output_hash;
+        # (b) same-target — N unproductive attempts against the same
+        # extracted file/path even if the command text varies each turn.
+        recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
+        target_attempt_counts: dict[str, int] = {}
+        stuck_nudged = False
 
         for _ in range(MAX_TURNS):
             turns += 1
@@ -568,6 +621,78 @@ class StructuredToolAgent(BaseAgent):
                         "content": json.dumps({"skipped": True}),
                     }
                 )
+
+            if name in ("terminal_exec", "read_file"):
+                command_or_path = (
+                    args.get("command", "") if name == "terminal_exec"
+                    else args.get("path", "")
+                )
+                combined_output = receipt.stdout_tail + receipt.stderr_tail
+                fingerprint = (
+                    name,
+                    command_or_path,
+                    receipt.exit_code,
+                    output_hash(combined_output),
+                )
+                repeat_count = sum(1 for f in recent_fingerprints if f == fingerprint)
+                recent_fingerprints.append(fingerprint)
+
+                target = (
+                    command_or_path if name == "read_file"
+                    else extract_target(command_or_path)
+                )
+                target_is_stuck = False
+                if target:
+                    if is_unproductive_attempt(receipt.exit_code, combined_output):
+                        target_attempt_counts[target] = (
+                            target_attempt_counts.get(target, 0) + 1
+                        )
+                    else:
+                        target_attempt_counts[target] = 0
+                    target_is_stuck = (
+                        target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
+                    )
+
+                exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+
+                if exact_repeat_stuck or target_is_stuck:
+                    if not stuck_nudged:
+                        stuck_nudged = True
+                        if exact_repeat_stuck:
+                            self.logger.warning(
+                                "turn %d: stuck loop detected (same %s, "
+                                "exit code, and output %d times), sending "
+                                "nudge",
+                                turns,
+                                name,
+                                repeat_count + 1,
+                            )
+                            nudge_content = STUCK_LOOP_MESSAGE
+                        else:
+                            self.logger.warning(
+                                "turn %d: stuck loop detected (%d "
+                                "unproductive attempts against target %r), "
+                                "sending nudge",
+                                turns,
+                                target_attempt_counts[target],
+                                target,
+                            )
+                            nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(
+                                target=target
+                            )
+                        messages.append({"role": "user", "content": nudge_content})
+                    else:
+                        self.logger.warning(
+                            "turn %d: stuck loop repeated after nudge, "
+                            "terminating",
+                            turns,
+                        )
+                        termination_reason = "stuck_loop_detected"
+                        context.metadata["termination_reason"] = termination_reason
+                        context.metadata[
+                            "verification_status"
+                        ] = compute_verification_status()
+                        break
 
         if termination_reason is None:
             termination_reason = "max_turns"

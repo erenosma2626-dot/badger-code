@@ -111,6 +111,25 @@ def test_identical_command_exit_code_and_output_triggers_stuck_loop():
     assert context.metadata["turns"] < 20
 
 
+def test_varying_command_against_same_target_repeatedly_failing_triggers_stuck_loop():
+    """§2.3 (v0.4 spec) — the fix-code-vulnerability trial pattern: the
+    model varies its grep pattern each turn but keeps missing against the
+    SAME file, never reading it directly. Command text differs every turn
+    (so the exact-repeat fingerprint never fires), but the same-target
+    signal must still catch it before max_turns."""
+    results = [FakeExecResult("ok\n", "", 0)]  # bootstrap
+    results += [FakeExecResult("", "", 1) for _ in range(6)]  # grep: no match, each time
+    env = FakeEnvironment(results)
+    llm_script = [
+        f'```bash\ngrep -n "pattern_{i}" src/app.py\n```' for i in range(6)
+    ]
+
+    context = run_agent(env, llm_script, max_turns=20)
+
+    assert context.metadata["termination_reason"] == "stuck_loop_detected"
+    assert context.metadata["turns"] < 20
+
+
 def test_retry_with_changing_outcome_is_not_flagged_as_stuck():
     """(b) Same command text, but exit code/output change each call (e.g. a
     server coming up) → must NOT be treated as a stuck loop; the agent

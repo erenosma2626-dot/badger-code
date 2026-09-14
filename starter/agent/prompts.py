@@ -137,6 +137,15 @@ DIFFERENT approach: read the actual error message, inspect the current \
 file/directory state, or reconsider your assumption about why it's failing.\
 """
 
+TARGET_STUCK_LOOP_MESSAGE = """\
+Your last several attempts targeting {target} have not gotten you \
+anywhere (failed, or came back with no useful result) — repeating this \
+approach on the same target will not change the outcome. Try a \
+DIFFERENT strategy: for example, read the file start-to-end instead of \
+guessing at a partial search, or reconsider whether \
+{target} is even the right target for what you're looking for.\
+"""
+
 COMPLETION_EVIDENCE_MESSAGE = """\
 You're declaring the task complete, but nothing since your last file edit \
 has verified it worked (no test run, no re-read of the file, no execution \
