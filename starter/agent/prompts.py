@@ -200,6 +200,15 @@ Your last response didn't call any of the four tools (terminal_exec, \
 write_file, read_file, task_complete). Call exactly one of them now.\
 """
 
+STRUCTURED_COMPLETION_EVIDENCE_MESSAGE = """\
+You're declaring the task complete, but nothing since your last write_file \
+call has verified it worked (no terminal_exec/read_file since). Before \
+finishing: call terminal_exec or read_file NOW to check your work — a \
+text explanation alone will not be accepted as evidence. If you declare \
+task_complete again without a new tool call in between, it will be \
+rejected outright.\
+"""
+
 
 def observation_message(observation: str) -> str:
     """Format an action's result (a command's output, or a write_file

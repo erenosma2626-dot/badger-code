@@ -86,6 +86,7 @@ from agent.llm import LLMClient
 from agent.prompts import (
     COMPLETION_EVIDENCE_MESSAGE,
     NUDGE_MESSAGE,
+    STRUCTURED_COMPLETION_EVIDENCE_MESSAGE,
     STRUCTURED_NUDGE_MESSAGE,
     STRUCTURED_SYSTEM_PROMPT,
     STUCK_LOOP_MESSAGE,
@@ -224,6 +225,13 @@ class BaselineAgent(BaseAgent):
         pending_verification = False
         had_successful_test_after_edit = False
         completion_evidence_nudged = False
+        # §2.1 (v0.4 spec, tightened) — whether any genuine tool-call
+        # (write_file or a shell command, regardless of outcome) has
+        # happened since the completion-evidence nudge was sent. A second
+        # TASK_COMPLETE that arrives with this still False means the model
+        # just re-declared done from text alone — rejected hard, not
+        # nudged a third time (see the done-branch below).
+        action_since_nudge = False
 
         def compute_verification_status() -> str:
             if not has_edited:
@@ -265,13 +273,35 @@ class BaselineAgent(BaseAgent):
                     # anything actually verified the last edit? See the
                     # regex-log / log-summary-date-ranges / polyglot-c-py
                     # trials in docs/plan.md — all three declared done with
-                    # zero evidence. This is a nudge, not a hard block: if
-                    # the model still says done afterward, we accept it.
+                    # zero evidence.
                     completion_evidence_nudged = True
+                    action_since_nudge = False
                     messages.append(
                         {"role": "user", "content": COMPLETION_EVIDENCE_MESSAGE}
                     )
                     continue
+
+                if pending_verification and not action_since_nudge:
+                    # §2.1 (tightened, v0.4 spec) — the log-summary-date-ranges
+                    # trial (docs/plan.md) showed the old one-nudge-then-
+                    # always-accept gate doesn't catch a "yüzeysel öz-doğrulama":
+                    # the model responding to the nudge with narrative alone
+                    # and re-declaring done, no new tool-call/receipt in
+                    # between. That is rejected HARD here — not nudged a
+                    # third time (no infinite-loop risk: this is a terminal
+                    # decision, not another retry).
+                    self.logger.warning(
+                        "turn %d: TASK_COMPLETE re-declared with no new "
+                        "tool-call since the completion-evidence nudge; "
+                        "rejecting hard",
+                        turns,
+                    )
+                    termination_reason = "completion_rejected_no_new_evidence"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata[
+                        "verification_status"
+                    ] = compute_verification_status()
+                    break
 
                 finished = True
                 termination_reason = "task_complete"
@@ -296,6 +326,7 @@ class BaselineAgent(BaseAgent):
                 has_edited = True
                 pending_verification = True
                 completion_evidence_nudged = False
+                action_since_nudge = True
 
                 fingerprint = observation.receipt.fingerprint()
                 recent_fingerprints.append(fingerprint)
@@ -312,6 +343,7 @@ class BaselineAgent(BaseAgent):
             observation = await run_shell(
                 environment, action.command, timeout_sec=COMMAND_TIMEOUT_SEC
             )
+            action_since_nudge = True
 
             fingerprint = (
                 *observation.receipt.fingerprint(),
@@ -487,6 +519,14 @@ class StructuredToolAgent(BaseAgent):
         target_attempt_counts: dict[str, int] = {}
         stuck_nudged = False
 
+        # §2.1 (tightened, v0.4 spec) — same completion-evidence gate as
+        # BaselineAgent: one nudge on the first task_complete while
+        # pending_verification, then a second task_complete is accepted
+        # ONLY if a genuine new tool call happened since the nudge; a bare
+        # re-declare is rejected hard (terminal decision, no third nudge).
+        completion_evidence_nudged = False
+        action_since_nudge = False
+
         for _ in range(MAX_TURNS):
             turns += 1
 
@@ -551,6 +591,55 @@ class StructuredToolAgent(BaseAgent):
             args = call["arguments"]
 
             if name == "task_complete":
+                if pending_verification and not completion_evidence_nudged:
+                    # §2.1 — one nudge before accepting completion; see
+                    # BaselineAgent's identical gate for the trials this
+                    # addresses (docs/plan.md).
+                    completion_evidence_nudged = True
+                    action_since_nudge = False
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(
+                                {"acknowledged": False, "reason": "insufficient evidence"}
+                            ),
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": STRUCTURED_COMPLETION_EVIDENCE_MESSAGE,
+                        }
+                    )
+                    continue
+
+                if pending_verification and not action_since_nudge:
+                    # §2.1 (tightened) — a second task_complete with no new
+                    # tool call since the nudge is rejected HARD, not
+                    # nudged a third time (no infinite-loop risk).
+                    self.logger.warning(
+                        "turn %d: task_complete re-declared with no new "
+                        "tool call since the completion-evidence nudge; "
+                        "rejecting hard",
+                        turns,
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(
+                                {"acknowledged": False, "reason": "insufficient evidence"}
+                            ),
+                        }
+                    )
+                    termination_reason = "completion_rejected_no_new_evidence"
+                    context.metadata["termination_reason"] = termination_reason
+                    context.metadata[
+                        "verification_status"
+                    ] = compute_verification_status()
+                    break
+
                 finished = True
                 termination_reason = "task_complete"
                 messages.append(
@@ -571,6 +660,7 @@ class StructuredToolAgent(BaseAgent):
                 receipt = await structured_terminal_exec(
                     environment, args.get("command", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                action_since_nudge = True
                 if has_edited and receipt.exit_code == 0:
                     pending_verification = False
                     had_successful_test_after_edit = True
@@ -583,10 +673,13 @@ class StructuredToolAgent(BaseAgent):
                 )
                 has_edited = True
                 pending_verification = True
+                completion_evidence_nudged = False
+                action_since_nudge = True
             elif name == "read_file":
                 receipt = await structured_read_file(
                     environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                action_since_nudge = True
             else:
                 receipt_dict = {"error": f"unknown tool: {name}"}
                 messages.append(

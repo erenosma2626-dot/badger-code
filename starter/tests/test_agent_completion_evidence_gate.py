@@ -1,10 +1,16 @@
-"""Tests for the completion-evidence soft-gate: when the agent declares
-TASK_COMPLETE with verification_status missing/stale, the first attempt
-must be rejected (loop continues) and only the SECOND attempt is accepted
-— even if verification is still missing/stale. This must never turn into
-a hard block or an infinite nudge loop, and the retry counter must be
-per-episode (a fresh BaselineAgent.run() call must not remember the
-previous episode's nudge state).
+"""Tests for the completion-evidence gate (v0.4 spec §2.1, tightened):
+when the agent declares TASK_COMPLETE with verification_status
+missing/stale, the first attempt is rejected with a nudge. The SECOND
+attempt is only accepted if a genuine NEW tool-call (write_file or a shell
+command, regardless of its outcome) happened since the nudge — a bare
+text response that re-declares done is rejected HARD (terminates the
+episode, not another nudge, so there is no infinite-loop risk). This
+tightening closes the "yüzeysel öz-doğrulama" gap from the
+log-summary-date-ranges trial (docs/plan.md): the old gate accepted a
+second TASK_COMPLETE unconditionally even when nothing but narrative
+happened in between. The nudge/retry state must still be per-episode (a
+fresh BaselineAgent.run() call must not remember the previous episode's
+nudge state).
 """
 
 import asyncio
@@ -81,49 +87,77 @@ WRITE_BLOCK = "```write_file:/app/solution.py\nprint('hi')\n```"
 
 def test_first_task_complete_with_missing_evidence_is_rejected_and_loop_continues():
     """(a) An edit with no verification since → first TASK_COMPLETE must be
-    rejected: the loop must NOT terminate, and the next scripted turn
-    (also TASK_COMPLETE) is what actually needs to run."""
+    rejected: the loop must NOT terminate on turn 2, and a genuine action
+    (a shell command) before the next TASK_COMPLETE is what lets the run
+    terminate as accepted rather than hard-rejected."""
     env = FakeEnvironment()
     # Turn 1: edit the file (verification_status becomes "missing").
-    # Turn 2: declare TASK_COMPLETE while still missing -> must be rejected.
-    # Turn 3: LLM never gets to run because we only assert the loop kept
-    # going past turn 2 without terminating on it. Give a 3rd scripted turn
-    # that just declares complete again so the run terminates deterministically.
-    llm_script = [WRITE_BLOCK, "TASK_COMPLETE", "TASK_COMPLETE"]
+    # Turn 2: declare TASK_COMPLETE while still missing -> rejected (nudged).
+    # Turn 3: a genuine action since the nudge (§2.1 tightened gate).
+    # Turn 4: TASK_COMPLETE again -> accepted (evidence of an attempt exists).
+    llm_script = [
+        WRITE_BLOCK,
+        "TASK_COMPLETE",
+        "```bash\ncat /app/solution.py\n```",
+        "TASK_COMPLETE",
+    ]
 
     context = run_agent(env, llm_script, max_turns=20)
 
     # It must have taken more than 2 turns (turn 2's TASK_COMPLETE was
-    # rejected, forcing a 3rd turn) to finish.
+    # rejected, forcing further turns) to finish.
     assert context.metadata["turns"] >= 3
     assert context.metadata["termination_reason"] == "task_complete"
 
 
-def test_second_task_complete_is_accepted_even_if_still_missing():
-    """(b) Even though verification_status is still 'missing' on the second
-    TASK_COMPLETE, it must be accepted (soft-block, not hard-fail) — no
-    infinite nudge loop."""
+def test_second_task_complete_with_no_new_action_since_nudge_is_rejected_hard():
+    """(b, tightened) A second TASK_COMPLETE that follows the nudge with NO
+    new tool-call in between (just re-declaring done) must be rejected
+    HARD — the episode terminates without accepting completion, and
+    without a third nudge (no infinite-loop risk)."""
     env = FakeEnvironment()
     llm_script = [WRITE_BLOCK, "TASK_COMPLETE", "TASK_COMPLETE"]
 
     context = run_agent(env, llm_script, max_turns=20)
 
-    assert context.metadata["termination_reason"] == "task_complete"
+    assert context.metadata["termination_reason"] == "completion_rejected_no_new_evidence"
+    assert context.metadata["finished"] is not True
     assert context.metadata["verification_status"] == "missing"
-    # Exactly 3 turns: edit, rejected TASK_COMPLETE, accepted TASK_COMPLETE.
+    # 3 turns: edit, rejected (nudged) TASK_COMPLETE, hard-rejected TASK_COMPLETE.
     assert context.metadata["turns"] == 3
+
+
+def test_second_task_complete_is_accepted_when_a_new_action_happened_since_the_nudge():
+    """(c) If the model takes ANY genuine action after the nudge — even an
+    inspect command that doesn't actually pass verification — before
+    re-declaring done, that declaration is accepted (soft-block): the gate
+    requires evidence of an attempt, not proof of a passing test."""
+    env = FakeEnvironment()
+    llm_script = [
+        WRITE_BLOCK,
+        "TASK_COMPLETE",
+        "```bash\ncat /app/solution.py\n```",
+        "TASK_COMPLETE",
+    ]
+
+    context = run_agent(env, llm_script, max_turns=20)
+
+    assert context.metadata["termination_reason"] == "task_complete"
+    assert context.metadata["finished"] is True
 
 
 def test_nudge_counter_is_per_episode_not_global():
     """Running two separate episodes back-to-back on fresh agent instances:
-    the second episode must ALSO get one rejection before acceptance — the
-    nudge-once state must not leak from the first run() call."""
+    the second episode must ALSO get one rejection (and, with no new
+    action taken, the same hard rejection) — the nudge-once state and the
+    action-since-nudge flag must not leak from the first run() call."""
     env1 = FakeEnvironment()
     llm_script = [WRITE_BLOCK, "TASK_COMPLETE", "TASK_COMPLETE"]
     context1 = run_agent(env1, llm_script, max_turns=20)
     assert context1.metadata["turns"] == 3
+    assert context1.metadata["termination_reason"] == "completion_rejected_no_new_evidence"
 
     env2 = FakeEnvironment()
     context2 = run_agent(env2, llm_script, max_turns=20)
     assert context2.metadata["turns"] == 3
-    assert context2.metadata["termination_reason"] == "task_complete"
+    assert context2.metadata["termination_reason"] == "completion_rejected_no_new_evidence"
