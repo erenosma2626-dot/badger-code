@@ -414,6 +414,26 @@ class StructuredToolAgent(BaseAgent):
         finished = False
         termination_reason: str | None = None
 
+        # verification_status tracking (v0.4 spec §1.1 madde 1), derived
+        # from the receipt stream rather than BaselineAgent's shell-command
+        # classifier: write_file is unambiguously the only "edit" tool here,
+        # and any terminal_exec with exit_code=0 counts as verification
+        # (StructuredToolAgent has no separate edit/test/inspect split for
+        # shell commands the way tools.classify_command does for
+        # BaselineAgent's free-text bash blocks).
+        has_edited = False
+        pending_verification = False
+        had_successful_test_after_edit = False
+
+        def compute_verification_status() -> str:
+            if not has_edited:
+                return "not_applicable"
+            if not pending_verification:
+                return "passed"
+            if had_successful_test_after_edit:
+                return "stale"
+            return "missing"
+
         for _ in range(MAX_TURNS):
             turns += 1
 
@@ -428,6 +448,7 @@ class StructuredToolAgent(BaseAgent):
                 "finished": finished,
                 "messages": messages,
                 "termination_reason": termination_reason,
+                "verification_status": compute_verification_status(),
             }
 
             # Native tool-calling assistant messages must carry the raw
@@ -490,12 +511,16 @@ class StructuredToolAgent(BaseAgent):
                 )
                 context.metadata["finished"] = True
                 context.metadata["termination_reason"] = termination_reason
+                context.metadata["verification_status"] = compute_verification_status()
                 break
 
             if name == "terminal_exec":
                 receipt = await structured_terminal_exec(
                     environment, args.get("command", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                if has_edited and receipt.exit_code == 0:
+                    pending_verification = False
+                    had_successful_test_after_edit = True
             elif name == "write_file":
                 receipt = await structured_write_file(
                     environment,
@@ -503,6 +528,8 @@ class StructuredToolAgent(BaseAgent):
                     args.get("content", ""),
                     timeout_sec=COMMAND_TIMEOUT_SEC,
                 )
+                has_edited = True
+                pending_verification = True
             elif name == "read_file":
                 receipt = await structured_read_file(
                     environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
@@ -545,3 +572,4 @@ class StructuredToolAgent(BaseAgent):
         if termination_reason is None:
             termination_reason = "max_turns"
         context.metadata["termination_reason"] = termination_reason
+        context.metadata["verification_status"] = compute_verification_status()
