@@ -52,9 +52,17 @@ logger = logging.getLogger(__name__)
 
 _bg_counter = 0
 
-CODE_BLOCK_RE = re.compile(r"```(?:bash|sh|shell)?\s*\n(.*?)```", re.DOTALL)
-"""Matches a Markdown fenced code block tagged as bash/sh/shell (or untagged).
-The captured group (1) is everything between the opening and closing fences."""
+CODE_BLOCK_RE = re.compile(r"```(?:bash|sh|shell)\s*\n(.*?)```", re.DOTALL)
+"""Matches a Markdown fenced code block EXPLICITLY tagged bash/sh/shell.
+The captured group (1) is everything between the opening and closing
+fences. Untagged fences are deliberately NOT matched here: models often
+use an untagged ``` block to quote file content or expected output rather
+than to issue a command, and executing that verbatim as free-text shell
+input is exactly the class of bug seen in the regex-log/sqlite-with-gcov
+trials (docs/agy-rootcause-git-apk.md §C) — free text like "But this
+doesn't ensure..." or a stray TASK_COMPLETE got sent to the container and
+failed with exit 127. Requiring an explicit tag makes that structurally
+impossible."""
 
 WRITE_FILE_RE = re.compile(r"```write_file:(\S+)\s*\n(.*?)```", re.DOTALL)
 """Matches a ```write_file:/path/to/file\\n<content>\\n``` block. Captured

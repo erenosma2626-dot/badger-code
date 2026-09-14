@@ -153,3 +153,64 @@ class LLMClient:
                 "completion_tokens": response.usage.completion_tokens or 0,
             }
         return text, usage
+
+    async def chat_tools(
+        self, messages: list[dict], tools: list[dict]
+    ) -> tuple[str, list[dict], dict]:
+        """Send the conversation with a native function-calling ``tools``
+        schema (OpenAI/Nebius-compatible) and get back structured tool
+        calls instead of free text the caller has to regex-parse.
+
+        This powers ``StructuredToolAgent`` (agent.py) — the "next target
+        architecture" from docs/plan.md, replacing markdown-fence parsing
+        (tools.py) with the model's own structured function-calling.
+
+        Parameters
+        ----------
+        messages : list[dict]
+            OpenAI-format message list, may include prior ``role="tool"``
+            messages from earlier tool calls.
+        tools : list[dict]
+            OpenAI-format ``tools=`` schema (see
+            ``agent.structured_tools.TOOL_SCHEMAS``).
+
+        Returns
+        -------
+        tuple[str, list[dict], dict]
+            - **text** — any free-text content alongside the tool calls
+              (often empty; small models sometimes narrate before calling).
+            - **tool_calls** — list of ``{"id", "name", "arguments"}`` dicts,
+              ``arguments`` already JSON-decoded into a dict (empty list if
+              the model didn't call a tool).
+            - **usage** — same shape as ``chat()``.
+        """
+        import json
+
+        response = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            tools=tools,
+            tool_choice="auto",
+        )
+        message = response.choices[0].message
+        text = message.content or ""
+
+        tool_calls: list[dict] = []
+        for call in getattr(message, "tool_calls", None) or []:
+            try:
+                arguments = json.loads(call.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            tool_calls.append(
+                {"id": call.id, "name": call.function.name, "arguments": arguments}
+            )
+
+        usage = {}
+        if response.usage is not None:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens or 0,
+                "completion_tokens": response.usage.completion_tokens or 0,
+            }
+        return text, tool_calls, usage
