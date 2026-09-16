@@ -1,6 +1,20 @@
 # v0.4.1 worker raporu (Claude Sonnet 5, worktree cao/d15a5ec0)
 
-3 madde tamamlandı, her biri ayrı commit(ler) ile, TDD ile (önce başarısız test, sonra minimum kod, sonra test tekrar çalıştırılıp doğrulandı). Tüm değişiklikler `starter/agent/agent.py`, `starter/agent/llm.py`, `starter/agent/prompts.py`, `starter/agent/tools.py` ve yeni test dosyalarında. `.env`/`secrets.json`/`*.pem` dosyalarına hiç dokunulmadı. worker1-agy'nin dokunduğu dosyalar (`structured_tools.py`'deki `read_file()`, `tools.py`'deki `is_unproductive_attempt()`, `prompts.py`'ye eklenen 2 genel kural) diff'te doğrulandı — çakışma yok.
+3 madde tamamlandı, her biri ayrı commit(ler) ile, TDD ile (önce başarısız test, sonra minimum kod, sonra test tekrar çalıştırılıp doğrulandı). Tüm değişiklikler `starter/agent/agent.py`, `starter/agent/llm.py`, `starter/agent/prompts.py`, `starter/agent/tools.py` ve yeni test dosyalarında. `.env`/`secrets.json`/`*.pem` dosyalarına hiç dokunulmadı.
+
+## Güncelleme (rebase / worker1-agy entegrasyonu)
+
+Branch `950be83`'ten dallanmıştı, worker1-agy'nin v0.4.1 kolay 3 düzeltmesi (main'e `fa1579b` olarak merge edilmiş) branch'te yoktu — supervisor bunu tespit edip `git fetch origin && git rebase origin/main` yapmamı istedi.
+
+**Sonuç: `git rebase origin/main` TEK bir conflict ile temiz sonuçlandı** (`starter/agent/tools.py`, `find_cyclic_multi_target_loop` fonksiyonunun eklendiği yerde — HEAD tarafı boştu, sadece kendi fonksiyonumu geri eklemem yeterliydi; worker1-agy'nin `is_unproductive_attempt()`'e `command=` parametresi eklemesiyle çakışmadı, farklı fonksiyonlardı). `starter/agent/agent.py` ve `starter/agent/prompts.py` git tarafından OTOMATİK merge edildi — özellikle agent.py'deki `is_unproductive_attempt(...)` çağrı siteleri, worker1-agy'nin eklediği `command=` argümanı İLE benim eklediğim `cyclic_target_history.append(target)` satırı bir arada, doğru şekilde birleşti (aşağıda doğrulandı). `structured_tools.py`'ye (read_file'ın temiz hata mesajı fix'i) hiç dokunmamıştım, conflict'siz geldi.
+
+Doğrulamalar:
+- `starter/agent/agent.py:414-427` ve `:850-862` — her iki `is_unproductive_attempt(...)` çağrısı da `command=`/`cmd=` parametresini taşıyor VE hemen ardından `cyclic_target_history.append(target)` var — iki değişiklik iç içe, kaybolan yok.
+- worker1-agy'nin 3 yeni test dosyası (`test_prompts_general_rules.py`, `test_structured_tools.py`, `test_tools_target_extraction.py` — toplam 31 test) rebase sonrası branch'te mevcut ve ayrı ayrı çalıştırılıp geçti.
+- `git diff fa1579b HEAD -- .env '**/secrets.json' '**/*.pem'` boş — bu dosyalara dokunulmadı.
+- `git log --oneline` sırası: `950be83` → worker1-agy'nin 3 commiti + rapor (`803df05`, `ca7b98f`, `356c470`, `fa1579b`) → benim 3 madde + rapor (`db18bbf`, `bfe6b64`, `653ebb3`, `a34a404`) — lineer, temiz.
+
+**Tam test suite: `pytest starter/tests -q` → 99 test, hepsi geçti.**
 
 ## Değişen dosyalar
 
@@ -30,7 +44,7 @@ Blocklist yaklaşımı spec'in istediği gibi (allowlist yerine) — "hangi komu
 
 ## Test durumu
 
-`pytest starter/tests -q` → **85 test, hepsi geçti** (madde 1 öncesi 65, madde 2 sonrası 69, madde 3 sonrası 72+1 güncellenen, madde 1 sonrası 85).
+Rebase ÖNCESİ (worker1-agy'siz): `pytest starter/tests -q` → 85 test, hepsi geçti (madde 1 öncesi 65, madde 2 sonrası 69, madde 3 sonrası 72+1 güncellenen, madde 1 sonrası 85). Rebase SONRASI (worker1-agy'nin 3 fix'i + testleri dahil): **99 test, hepsi geçti** (+14 worker1-agy testi).
 
 Madde bazlı yeni testler:
 - Madde 1: `test_tools_cyclic_target_loop.py` (6, saf fonksiyon), `test_structured_agent_cyclic_loop.py` (4), `test_agent_cyclic_loop.py` (3) — toplam 13
