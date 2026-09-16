@@ -121,7 +121,14 @@ turn does not persist to the next turn; you start back wherever the \
 container's default working directory is. If you need to operate in a \
 different directory, either chain it in the SAME command (`cd X && Y`) \
 or use absolute paths instead of relying on a previous `cd`.
-7. When the task is fully complete, respond with exactly the following, \
+7. If output ordering matters in a task (e.g. date-ordered list, log \
+summary table), do NOT use Python `set` — iteration order of sets is \
+not guaranteed and you may produce correct data in the wrong order. Use \
+`list` or sort explicitly if order matters.
+8. Before completing the task, clean up temporary or binary files produced \
+during compilation/build (e.g. gcc output, .o files) — ensure only the \
+expected files remain in the target output directory.
+9. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -200,7 +207,13 @@ never use editors or pagers. Long-running commands are killed after a
 timeout — prefer fast, targeted commands. Each terminal_exec call is a
 SEPARATE shell invocation — a `cd` in one call does not persist to the
 next one; if you need a different working directory, chain it in the SAME
-command (`cd X && Y`) or use absolute paths.
+command (`cd X && Y`) or use absolute paths. If output ordering matters
+in a task (e.g. date-ordered list, log summary table), do NOT use
+Python `set` — iteration order of sets is not guaranteed and you may
+produce correct data in the wrong order; use `list` or sort explicitly.
+Before completing the task, clean up temporary or binary files produced
+during compilation/build (e.g. gcc output, .o files) — ensure only the
+expected files remain in the target output directory.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
