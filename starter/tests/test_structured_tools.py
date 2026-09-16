@@ -228,6 +228,19 @@ def test_read_file_existing_file_in_minimal_env_succeeds(tmp_path):
     assert receipt.error is None
 
 
+def test_read_file_directory_in_minimal_env_fails_cleanly(tmp_path):
+    """Madde 2: In a minimal environment without python3, reading a directory
+    must fail with non-zero exit_code and 'Is a directory'."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "printf", "tr"])
+    env = _RealBashInMinimalPathEnvironment(path)
+
+    receipt = asyncio.run(read_file(env, str(tmp_path), timeout_sec=10))
+
+    assert receipt.exit_code != 0
+    err = (receipt.error or "") + " " + receipt.stderr_tail
+    assert "is a directory" in err.lower()
+
+
 def test_read_file_handles_stdout_merged_error_without_decode_failure():
     """Madde 2: When an execution environment merges stderr into stdout with return code 0,
     read_file must detect the 'no such file' error instead of raising 'decode failed: Incorrect padding'."""
@@ -252,10 +265,41 @@ def test_read_file_nonexistent_file_with_python3_env_fails_cleanly(tmp_path):
 
     receipt = asyncio.run(read_file(env, str(missing), timeout_sec=10))
 
-    assert receipt.exit_code != 0
+    assert receipt.exit_code == 1
     err = (receipt.error or "") + " " + receipt.stderr_tail
+    assert "syntaxerror" not in err.lower(), f"Unexpected SyntaxError: {err}"
     assert "no such file" in err.lower() or "not found" in err.lower()
     assert "incorrect padding" not in err.lower()
+
+
+def test_read_file_existing_file_with_python3_env_succeeds(tmp_path):
+    """v0.4.1.1 hotfix: reading an existing file when python3 is available must succeed
+    and never fail with SyntaxError: invalid syntax."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "python3"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "existing.txt"
+    target.write_text("hello python3 read\n")
+
+    receipt = asyncio.run(read_file(env, str(target), timeout_sec=10))
+
+    assert receipt.exit_code == 0, f"Expected exit_code 0, got {receipt.exit_code} (error: {receipt.error})"
+    assert receipt.stdout_tail == "hello python3 read\n"
+    assert receipt.error is None
+    assert "syntaxerror" not in (receipt.stderr_tail or "").lower()
+
+
+def test_read_file_directory_with_python3_env_fails_cleanly(tmp_path):
+    """v0.4.1.1 hotfix: reading a directory when python3 is available must fail with
+    'Is a directory' and exit 1, not crash with SyntaxError."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "python3"])
+    env = _RealBashInMinimalPathEnvironment(path)
+
+    receipt = asyncio.run(read_file(env, str(tmp_path), timeout_sec=10))
+
+    assert receipt.exit_code == 1
+    err = (receipt.error or "") + " " + receipt.stderr_tail
+    assert "syntaxerror" not in err.lower()
+    assert "is a directory" in err.lower()
 
 
 def test_read_file_empty_file_succeeds(tmp_path):
@@ -282,5 +326,47 @@ def test_read_file_has_python3_base64_fallback_chain():
     assert "command -v python3" in cmd, "must probe for python3 before assuming it exists"
     assert "command -v base64" in cmd, "must probe for base64 before assuming it exists"
     assert "no python3 or base64 available" in cmd, "must fail loudly if neither tool exists"
+
+
+def test_read_file_direct_subprocess_python3_command_no_syntax_error(tmp_path):
+    """v0.4.1.1 hotfix: Extract the generated python3 command string from read_file
+    and execute it directly via subprocess.run(["python3", "-c", ...]), verifying
+    that existing file, nonexistent file, and directory execute without SyntaxError."""
+    import subprocess
+    import sys
+
+    # 1. Existing file
+    existing = tmp_path / "hello.txt"
+    existing.write_text("subprocess test content\n")
+    env = FakeEnvironment(stdout="", return_code=0)
+    asyncio.run(read_file(env, str(existing), timeout_sec=10))
+    cmd = env.last_command
+    assert 'python3 -c "' in cmd
+    py_code = cmd.split('python3 -c "', 1)[1].split('"; elif', 1)[0]
+
+    proc_exist = subprocess.run([sys.executable, "-c", py_code], capture_output=True, text=True)
+    assert "SyntaxError" not in proc_exist.stderr
+    assert proc_exist.returncode == 0
+    assert base64.b64decode(proc_exist.stdout).decode("utf-8") == "subprocess test content\n"
+
+    # 2. Nonexistent file
+    missing = tmp_path / "missing.txt"
+    asyncio.run(read_file(env, str(missing), timeout_sec=10))
+    cmd = env.last_command
+    py_code = cmd.split('python3 -c "', 1)[1].split('"; elif', 1)[0]
+    proc_missing = subprocess.run([sys.executable, "-c", py_code], capture_output=True, text=True)
+    assert "SyntaxError" not in proc_missing.stderr
+    assert proc_missing.returncode == 1
+    assert "No such file" in proc_missing.stderr
+
+    # 3. Directory
+    asyncio.run(read_file(env, str(tmp_path), timeout_sec=10))
+    cmd = env.last_command
+    py_code = cmd.split('python3 -c "', 1)[1].split('"; elif', 1)[0]
+    proc_dir = subprocess.run([sys.executable, "-c", py_code], capture_output=True, text=True)
+    assert "SyntaxError" not in proc_dir.stderr
+    assert proc_dir.returncode == 1
+    assert "Is a directory" in proc_dir.stderr
+
 
 
