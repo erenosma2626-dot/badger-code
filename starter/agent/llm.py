@@ -22,7 +22,7 @@ All settings come from environment variables (loaded from ``.env`` via
   library requires a non-empty string, so use any placeholder like ``"ollama"``.
 - ``LLM_TEMPERATURE`` — Sampling temperature (default: 0.2). Lower = more
   deterministic.
-- ``LLM_MAX_TOKENS`` — Max tokens per completion (default: 2048).
+- ``LLM_MAX_TOKENS`` — Max tokens per completion (default: 8192).
 
 Model name resolution
 =====================
@@ -101,7 +101,7 @@ class LLMClient:
         api_key = os.environ.get("LLM_API_KEY", "none")
         self.model = _resolve_model(model_name)
         self.temperature = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
-        self.max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "2048"))
+        self.max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "8192"))
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     async def chat(self, messages: list[dict]) -> tuple[str, dict]:

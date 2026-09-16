@@ -92,6 +92,7 @@ from agent.prompts import (
     STUCK_LOOP_MESSAGE,
     SYSTEM_PROMPT,
     TARGET_STUCK_LOOP_MESSAGE,
+    TRUNCATED_RESPONSE_MESSAGE,
     observation_message,
 )
 from agent.structured_tools import TOOL_SCHEMAS
@@ -588,9 +589,11 @@ class StructuredToolAgent(BaseAgent):
                     usage.get("finish_reason"),
                     text,
                 )
-                messages.append(
-                    {"role": "user", "content": STRUCTURED_NUDGE_MESSAGE}
-                )
+                if usage.get("finish_reason") == "length":
+                    nudge_content = TRUNCATED_RESPONSE_MESSAGE
+                else:
+                    nudge_content = STRUCTURED_NUDGE_MESSAGE
+                messages.append({"role": "user", "content": nudge_content})
                 continue
 
             # Exactly one tool call per turn by prompt contract; if the

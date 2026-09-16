@@ -221,6 +221,15 @@ Your last response didn't call any of the four tools (terminal_exec, \
 write_file, read_file, task_complete). Call exactly one of them now.\
 """
 
+TRUNCATED_RESPONSE_MESSAGE = """\
+Your last response was cut off because it was too long (it hit the \
+max-token limit before finishing) — it did not contain a usable tool call. \
+Do NOT try to repeat the same content again; that will just get cut off \
+the same way. Instead, either produce the same result in a SHORTER or \
+split/incremental form (e.g. write a file in smaller pieces, or write a \
+more concise version), or try a different approach entirely.\
+"""
+
 STRUCTURED_COMPLETION_EVIDENCE_MESSAGE = """\
 You're declaring the task complete, but nothing since your last write_file \
 call has verified it worked (no terminal_exec/read_file since). Before \
