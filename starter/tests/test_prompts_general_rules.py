@@ -41,5 +41,25 @@ def test_structured_system_prompt_states_order_and_cleanup_rules():
 def test_prompts_rules_are_generic_not_task_specific():
     for prompt in (SYSTEM_PROMPT, STRUCTURED_SYSTEM_PROMPT):
         lowered = prompt.lower()
-        for banned in ("sqlite-with-gcov", "configure-git-webserver", "log-summary-date-ranges"):
+        for banned in (
+            "sqlite-with-gcov",
+            "configure-git-webserver",
+            "log-summary-date-ranges",
+            "regex-log",
+        ):
             assert banned not in lowered
+
+
+def test_baseline_system_prompt_states_regex_counting_rule():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "regex" in lowered
+    assert "lookahead" in lowered
+    assert "counting" in lowered or "count" in lowered
+
+
+def test_structured_system_prompt_states_regex_counting_rule():
+    lowered = STRUCTURED_SYSTEM_PROMPT.lower()
+    assert "regex" in lowered
+    assert "lookahead" in lowered
+    assert "counting" in lowered or "count" in lowered
+

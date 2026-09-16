@@ -128,7 +128,14 @@ not guaranteed and you may produce correct data in the wrong order. Use \
 8. Before completing the task, clean up temporary or binary files produced \
 during compilation/build (e.g. gcc output, .o files) — ensure only the \
 expected files remain in the target output directory.
-9. When the task is fully complete, respond with exactly the following, \
+9. If you need to express a counting constraint (such as "at most/at least \
+N occurrences") with regex, avoid chaining dozens of negative lookaheads — \
+this produces extremely long regexes (thousands of characters) that can \
+exceed output token limits and truncate your response. Instead: (a) extract \
+raw matches with a simpler regex and do the counting/filtering outside \
+regex (e.g. in Python code), or (b) move the counting constraint outside \
+the regex entirely.
+10. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -221,7 +228,13 @@ Python `set` — iteration order of sets is not guaranteed and you may
 produce correct data in the wrong order; use `list` or sort explicitly.
 Before completing the task, clean up temporary or binary files produced
 during compilation/build (e.g. gcc output, .o files) — ensure only the
-expected files remain in the target output directory.
+expected files remain in the target output directory. If you need to
+express a counting constraint (such as "at most/at least N occurrences")
+with regex, avoid chaining dozens of negative lookaheads — this produces
+extremely long regexes (thousands of characters) that can exceed output
+token limits and truncate your response. Instead: (a) extract raw matches
+with a simpler regex and do the counting/filtering outside regex (e.g. in
+Python code), or (b) move the counting constraint outside the regex entirely.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
