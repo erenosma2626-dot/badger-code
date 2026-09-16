@@ -86,7 +86,24 @@ def test_second_task_complete_with_no_new_tool_call_is_rejected_hard(monkeypatch
     assert ctx.metadata["turns"] == 3
 
 
-def test_second_task_complete_after_a_new_tool_call_is_accepted(monkeypatch):
+def test_second_task_complete_after_a_new_meaningful_tool_call_is_accepted(monkeypatch):
+    turns = [
+        ("", [WRITE_CALL]),
+        ("", [DONE_CALL(1)]),
+        ("", [{"id": "c2", "name": "terminal_exec", "arguments": {"command": "python3 /app/x.py"}}]),
+        ("", [DONE_CALL(2)]),
+    ]
+    ctx = run_structured_agent(monkeypatch, turns)
+    assert ctx.metadata["termination_reason"] == "task_complete"
+    assert ctx.metadata["finished"] is True
+
+
+def test_second_task_complete_after_only_a_read_file_readback_is_still_rejected(monkeypatch):
+    """v0.4.1 madde 3 (tightened further): a read_file call after the nudge
+    is often just the model re-reading its own edit back as "proof" — it
+    is NOT meaningful new verification (see is_meaningful_verification),
+    so this must still hard-reject, unlike the pre-v0.4.1 behavior where
+    any tool call (including read_file) was accepted as sufficient."""
     turns = [
         ("", [WRITE_CALL]),
         ("", [DONE_CALL(1)]),
@@ -94,5 +111,5 @@ def test_second_task_complete_after_a_new_tool_call_is_accepted(monkeypatch):
         ("", [DONE_CALL(2)]),
     ]
     ctx = run_structured_agent(monkeypatch, turns)
-    assert ctx.metadata["termination_reason"] == "task_complete"
-    assert ctx.metadata["finished"] is True
+    assert ctx.metadata["termination_reason"] == "completion_rejected_no_new_evidence"
+    assert ctx.metadata["finished"] is not True

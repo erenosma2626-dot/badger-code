@@ -114,6 +114,30 @@ COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
 STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
 STUCK_LOOP_THRESHOLD = 3
 
+_PASSIVE_COMMAND_PREFIXES = ("cat", "ls", "chmod", "chown", "echo", "pwd", "head", "tail")
+"""§v0.4.1 madde 3 — commands whose first word marks them as purely
+passive/administrative (reading a file back, listing a directory, setting
+permissions) rather than genuine verification (running a test, executing
+the program, diffing output, etc.). Deliberately a BLOCKLIST, not an
+allowlist: guessing which commands constitute "a real test" is
+task-dependent and unreliable, but the set of commands that are
+*definitely never* verification is small and safe to enumerate."""
+
+
+def is_meaningful_verification(command: str) -> bool:
+    """Pure, side-effect-free check: does ``command`` look like genuine
+    verification (a test run, a build, a program execution, ...) rather
+    than a passive/administrative command (``cat``, ``ls``, ``chmod``, ...)
+    that merely inspects state or sets metadata without checking anything?
+
+    Only used for ``terminal_exec`` commands — ``read_file`` tool calls
+    are handled separately since they're never routed through this
+    function (see the call sites in ``StructuredToolAgent.run``).
+    """
+    first_word = command.strip().split(maxsplit=1)[0] if command.strip() else ""
+    return first_word not in _PASSIVE_COMMAND_PREFIXES
+
+
 BOOTSTRAP_COMMAND = (
     "pwd && echo --- && ls -la && echo --- && ls -la /app 2>/dev/null "
     "&& echo --- && find /app -type f 2>/dev/null | head -200 "
@@ -538,6 +562,13 @@ class StructuredToolAgent(BaseAgent):
         # re-declare is rejected hard (terminal decision, no third nudge).
         completion_evidence_nudged = False
         action_since_nudge = False
+        # §v0.4.1 madde 3 — separate from action_since_nudge: whether a
+        # *meaningful* action (per is_meaningful_verification; read_file
+        # never counts) has happened since the nudge. A model that only
+        # cat's/read_file's its own edit back after being nudged still has
+        # action_since_nudge=True but meaningful_action_since_nudge=False,
+        # and must still be rejected hard.
+        meaningful_action_since_nudge = False
 
         for _ in range(MAX_TURNS):
             turns += 1
@@ -611,6 +642,7 @@ class StructuredToolAgent(BaseAgent):
                     # addresses (docs/plan.md).
                     completion_evidence_nudged = True
                     action_since_nudge = False
+                    meaningful_action_since_nudge = False
                     messages.append(
                         {
                             "role": "tool",
@@ -628,7 +660,7 @@ class StructuredToolAgent(BaseAgent):
                     )
                     continue
 
-                if pending_verification and not action_since_nudge:
+                if pending_verification and not meaningful_action_since_nudge:
                     # §2.1 (tightened) — a second task_complete with no new
                     # tool call since the nudge is rejected HARD, not
                     # nudged a third time (no infinite-loop risk).
@@ -671,11 +703,15 @@ class StructuredToolAgent(BaseAgent):
                 break
 
             if name == "terminal_exec":
+                command = args.get("command", "")
                 receipt = await structured_terminal_exec(
-                    environment, args.get("command", ""), timeout_sec=COMMAND_TIMEOUT_SEC
+                    environment, command, timeout_sec=COMMAND_TIMEOUT_SEC
                 )
                 action_since_nudge = True
-                if has_edited and receipt.exit_code == 0:
+                meaningful = is_meaningful_verification(command)
+                if meaningful:
+                    meaningful_action_since_nudge = True
+                if has_edited and receipt.exit_code == 0 and meaningful:
                     pending_verification = False
                     had_successful_test_after_edit = True
             elif name == "write_file":
@@ -689,10 +725,16 @@ class StructuredToolAgent(BaseAgent):
                 pending_verification = True
                 completion_evidence_nudged = False
                 action_since_nudge = True
+                meaningful_action_since_nudge = True
             elif name == "read_file":
                 receipt = await structured_read_file(
                     environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
                 )
+                # §v0.4.1 madde 3 — read_file is a passive readback (often
+                # the model reading its own edit back as "proof"); it counts
+                # for action_since_nudge (existing behavior) but NOT for
+                # meaningful_action_since_nudge, so a nudge-then-only-
+                # read_file-then-task_complete sequence is still rejected.
                 action_since_nudge = True
             else:
                 receipt_dict = {"error": f"unknown tool: {name}"}
