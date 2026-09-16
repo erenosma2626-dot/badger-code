@@ -160,6 +160,26 @@ def test_cyclic_signal_alone_triggers_when_neither_other_signal_would(monkeypatc
     assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
 
 
+def test_ten_targets_cyclic_loop_triggers_stuck_loop_with_window_44(monkeypatch):
+    # Real-world fix-code-vulnerability scenario: 10 targets cycled through.
+    # With CYCLIC_LOOP_WINDOW=44, laps 1+2 (20 turns) trip cyclic nudge,
+    # and lap 3 repeats the cycle key triggering hard termination at turn 30.
+    targets = [f"file{i}.py" for i in range(10)]
+    files = targets * 3
+    results = [FakeExecResult("looked, nothing changed\n", "", 0) for _ in files]
+    env = FakeEnvironment(results)
+    turns = [_exec_call(i, f) for i, f in enumerate(files)] + [
+        ("", [{"id": "done", "name": "task_complete", "arguments": {"evidence": "done"}}])
+    ]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=35)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+    assert ctx.metadata["turns"] == 30
+
+
+
 # (d) regression: existing exact-repeat and same-target stuck-loop tests
+
 # must still pass — covered by test_structured_agent_stuck_loop.py, run
 # together with this file as part of the full suite.

@@ -115,11 +115,13 @@ MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "100"))
 COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
 STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
 STUCK_LOOP_THRESHOLD = 3
-# §v0.4.1 madde 1 — how many recent visited targets (shell/terminal_exec
+# §v0.4.1.2 madde 1 — how many recent visited targets (shell/terminal_exec
 # extract_target() results, or read_file paths) to scan for a repeating
-# A->B->C->D->A->B->C->D cycle. 8 allows detecting cycle lengths up to 4
-# distinct targets (two full laps); see tools.find_cyclic_multi_target_loop.
-CYCLIC_LOOP_WINDOW = int(os.environ.get("AGENT_CYCLIC_LOOP_WINDOW", "8"))
+# A->B->C->D->A->B->C->D cycle. 44 allows detecting cycle lengths up to 22
+# actions/distinct targets (two full laps, e.g. 9-10 files visited twice
+# per lap via read_file + cat); see tools.find_cyclic_multi_target_loop.
+CYCLIC_LOOP_WINDOW = int(os.environ.get("AGENT_CYCLIC_LOOP_WINDOW", "44"))
+
 
 _PASSIVE_COMMAND_PREFIXES = ("cat", "ls", "chmod", "chown", "echo", "pwd", "head", "tail")
 """§v0.4.1 madde 3 — commands whose first word marks them as purely
