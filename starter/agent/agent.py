@@ -369,7 +369,9 @@ class BaselineAgent(BaseAgent):
             target_is_stuck = False
             if target:
                 if is_unproductive_attempt(
-                    observation.receipt.exit_code, str(observation)
+                    observation.receipt.exit_code,
+                    str(observation),
+                    command=action.command,
                 ):
                     target_attempt_counts[target] = (
                         target_attempt_counts.get(target, 0) + 1
@@ -745,7 +747,10 @@ class StructuredToolAgent(BaseAgent):
                 )
                 target_is_stuck = False
                 if target:
-                    if is_unproductive_attempt(receipt.exit_code, combined_output):
+                    cmd = None if name == "read_file" else command_or_path
+                    if is_unproductive_attempt(
+                        receipt.exit_code, combined_output, command=cmd
+                    ):
                         target_attempt_counts[target] = (
                             target_attempt_counts.get(target, 0) + 1
                         )

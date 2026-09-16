@@ -43,6 +43,7 @@ Improvement ideas
 
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -504,14 +505,68 @@ def extract_target(command_or_path: str) -> str | None:
     return matches[-1] if matches else None
 
 
-def is_unproductive_attempt(exit_code: int | None, output_text: str) -> bool:
+_SEARCH_READ_COMMANDS = {
+    "grep",
+    "egrep",
+    "fgrep",
+    "rgrep",
+    "rg",
+    "find",
+    "which",
+    "locate",
+    "whereis",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+}
+"""Commands whose primary purpose is inspecting, searching, or displaying files.
+When exit_code == 0, _UNPRODUCTIVE_KEYWORDS are only applied to these commands."""
+
+
+def is_unproductive_attempt(
+    exit_code: int | None, output_text: str, command: str | None = None
+) -> bool:
     """True if an attempt against a target produced nothing useful: a
     non-zero/unknown exit code, or output containing a "didn't find it"
-    signal even when the command technically exited 0."""
+    signal even when the command technically exited 0.
+
+    When exit_code == 0, the unproductive keyword check is ONLY applied if
+    command is a search/read command (starts with grep, find, which, cat, ls,
+    etc.) or if command is None (preserving backward compatibility). For build/run
+    commands (./configure, make, gcc, python3, etc.), exit_code == 0 is
+    considered productive even if output contains strings like "...not found".
+    """
     if exit_code not in (0, None):
         return True
+
+    if command is not None:
+        tokens = command.strip().split()
+        while tokens and (
+            tokens[0] in ("sudo", "nohup", "time", "busybox")
+            or (tokens[0].count("=") == 1 and not tokens[0].startswith("-"))
+        ):
+            tokens = tokens[1:]
+
+        if tokens and tokens[0] == "cd" and "&&" in tokens:
+            idx = tokens.index("&&")
+            if idx + 1 < len(tokens):
+                tokens = tokens[idx + 1 :]
+                while tokens and (
+                    tokens[0] in ("sudo", "nohup", "time", "busybox")
+                    or (tokens[0].count("=") == 1 and not tokens[0].startswith("-"))
+                ):
+                    tokens = tokens[1:]
+
+        first_word = os.path.basename(tokens[0]) if tokens else ""
+        if first_word not in _SEARCH_READ_COMMANDS:
+            return False
+
     lowered = output_text.lower()
     return any(kw in lowered for kw in _UNPRODUCTIVE_KEYWORDS)
+
 
 
 def output_hash(observation: str) -> str:
