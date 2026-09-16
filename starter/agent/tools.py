@@ -568,6 +568,41 @@ def is_unproductive_attempt(
     return any(kw in lowered for kw in _UNPRODUCTIVE_KEYWORDS)
 
 
+def find_cyclic_multi_target_loop(
+    history: list[str], max_window: int = 8
+) -> list[str] | None:
+    """v0.4.1 madde 1 — detect an agent cycling between N>=2 distinct
+    targets (A->B->C->D->A->B->C->D->...) without ever revisiting any ONE
+    of them consecutively enough to trip ``target_is_stuck``, and without
+    ever repeating an identical command enough to trip
+    ``exact_repeat_stuck``. Both existing signals miss this: neither looks
+    across more than one target at a time.
+
+    Looks only at the last ``max_window`` entries of ``history`` (the
+    targets visited, in order — one entry per shell/terminal_exec/read_file
+    action, ``None``s already filtered out by the caller). For each
+    candidate cycle length from 2 up to ``max_window // 2``, checks whether
+    the most recent ``cycle_len`` targets exactly equal the ``cycle_len``
+    targets immediately before them (i.e. two full back-to-back laps
+    through the same sequence) AND that sequence visits at least 2 distinct
+    targets (a single repeated target is ``target_is_stuck``'s job, not
+    this function's).
+
+    Returns the repeating cycle (e.g. ``["a.py", "b.py", "c.py", "d.py"]``)
+    if found, else ``None``.
+    """
+    n = len(history)
+    for cycle_len in range(2, max_window // 2 + 1):
+        span = cycle_len * 2
+        if n < span:
+            continue
+        recent = history[-span:]
+        first_half = recent[:cycle_len]
+        second_half = recent[cycle_len:]
+        if first_half == second_half and len(set(first_half)) >= 2:
+            return first_half
+    return None
+
 
 def output_hash(observation: str) -> str:
     """Short hash of an observation's text, used as part of the stuck-loop

@@ -85,6 +85,7 @@ from harbor.models.agent.context import AgentContext
 from agent.llm import LLMClient
 from agent.prompts import (
     COMPLETION_EVIDENCE_MESSAGE,
+    CYCLIC_LOOP_MESSAGE,
     NUDGE_MESSAGE,
     STRUCTURED_COMPLETION_EVIDENCE_MESSAGE,
     STRUCTURED_NUDGE_MESSAGE,
@@ -102,6 +103,7 @@ from agent.structured_tools import write_file as structured_write_file
 from agent.tools import (
     classify_command,
     extract_target,
+    find_cyclic_multi_target_loop,
     is_unproductive_attempt,
     output_hash,
     parse_action,
@@ -113,6 +115,11 @@ MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "100"))
 COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_COMMAND_TIMEOUT_SEC", "60"))
 STUCK_LOOP_WINDOW = int(os.environ.get("AGENT_STUCK_LOOP_WINDOW", "6"))
 STUCK_LOOP_THRESHOLD = 3
+# §v0.4.1 madde 1 — how many recent visited targets (shell/terminal_exec
+# extract_target() results, or read_file paths) to scan for a repeating
+# A->B->C->D->A->B->C->D cycle. 8 allows detecting cycle lengths up to 4
+# distinct targets (two full laps); see tools.find_cyclic_multi_target_loop.
+CYCLIC_LOOP_WINDOW = int(os.environ.get("AGENT_CYCLIC_LOOP_WINDOW", "8"))
 
 _PASSIVE_COMMAND_PREFIXES = ("cat", "ls", "chmod", "chown", "echo", "pwd", "head", "tail")
 """§v0.4.1 madde 3 — commands whose first word marks them as purely
@@ -247,13 +254,24 @@ class BaselineAgent(BaseAgent):
         # retried command whose *outcome* changes (e.g. polling a server
         # until it's ready) is never mistaken for a stuck loop.
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
-        stuck_nudged = False
+        # §v0.4.1 madde 1 — stuck_nudged is per trigger key (an
+        # exact-repeat key, a target name, or a cyclic-cycle key), not one
+        # global bool: a nudge received while stuck on target X no longer
+        # causes an immediate hard-terminate the first time the agent
+        # merely struggles with an UNRELATED target Y.
+        stuck_nudged: set[str] = set()
 
         # §2.3 (v0.4 spec) — same-target stuck-loop: N unproductive
         # attempts against the SAME extracted target (file/path), even if
         # the command text differs each time (a varying grep pattern
         # against the same file that never reads it directly, etc.).
         target_attempt_counts: dict[str, int] = {}
+        # §v0.4.1 madde 1 — cyclic_multi_target_loop: catches the agent
+        # cycling between N>=2 DIFFERENT targets (A->B->C->D->A->B->C->D)
+        # for two full laps, a pattern neither exact-repeat nor
+        # same-target catches since no single target repeats consecutively
+        # enough and no command text repeats verbatim enough.
+        cyclic_target_history: list[str] = []
 
         has_edited = False
         pending_verification = False
@@ -406,12 +424,25 @@ class BaselineAgent(BaseAgent):
                 target_is_stuck = (
                     target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
                 )
+                cyclic_target_history.append(target)
 
             exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+            cyclic_cycle = find_cyclic_multi_target_loop(
+                cyclic_target_history, CYCLIC_LOOP_WINDOW
+            )
 
-            if exact_repeat_stuck or target_is_stuck:
-                if not stuck_nudged:
-                    stuck_nudged = True
+            if exact_repeat_stuck:
+                trigger_key = "__exact_repeat__"
+            elif target_is_stuck:
+                trigger_key = target
+            elif cyclic_cycle:
+                trigger_key = "__cyclic__:" + ",".join(cyclic_cycle)
+            else:
+                trigger_key = None
+
+            if trigger_key is not None:
+                if trigger_key not in stuck_nudged:
+                    stuck_nudged.add(trigger_key)
                     if exact_repeat_stuck:
                         self.logger.warning(
                             "turn %d: stuck loop detected (same command, "
@@ -420,7 +451,7 @@ class BaselineAgent(BaseAgent):
                             repeat_count + 1,
                         )
                         nudge_content = STUCK_LOOP_MESSAGE
-                    else:
+                    elif target_is_stuck:
                         self.logger.warning(
                             "turn %d: stuck loop detected (%d unproductive "
                             "attempts against target %r), sending nudge",
@@ -429,6 +460,16 @@ class BaselineAgent(BaseAgent):
                             target,
                         )
                         nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(target=target)
+                    else:
+                        self.logger.warning(
+                            "turn %d: cyclic multi-target loop detected "
+                            "(cycling through %r), sending nudge",
+                            turns,
+                            cyclic_cycle,
+                        )
+                        nudge_content = CYCLIC_LOOP_MESSAGE.format(
+                            n=len(cyclic_cycle), targets=", ".join(cyclic_cycle)
+                        )
                     messages.append({"role": "user", "content": nudge_content})
                     continue
                 else:
@@ -546,14 +587,28 @@ class StructuredToolAgent(BaseAgent):
         # §1.1 madde 2 / §2.3 (v0.4 spec) — evidence-based stuck-loop
         # detection, ported from BaselineAgent and applied to
         # terminal_exec/read_file (write_file's success/failure is already
-        # covered by verification_status above). Two triggers, either one
-        # nudges once then hard-terminates on repeat, same as BaselineAgent:
+        # covered by verification_status above). Three triggers (v0.4.1
+        # madde 1 adds the third), any one of them nudges once then
+        # hard-terminates on repeat:
         # (a) exact repeat — same tool+command/path+exit_code+output_hash;
         # (b) same-target — N unproductive attempts against the same
-        # extracted file/path even if the command text varies each turn.
+        # extracted file/path even if the command text varies each turn;
+        # (c) cyclic_multi_target_loop — the agent cycles between N>=2
+        # DIFFERENT targets (A->B->C->D->A->B->C->D->...) for two full
+        # laps, never revisiting any single one enough to trip (b) and
+        # never repeating a command verbatim enough to trip (a). Observed
+        # in fix-code-vulnerability/build-cython-ext trials: 9-10 files
+        # cycled through for 100 turns, write_file never called.
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         target_attempt_counts: dict[str, int] = {}
-        stuck_nudged = False
+        cyclic_target_history: list[str] = []
+        # §v0.4.1 madde 1 — stuck_nudged is now keyed per trigger (an
+        # exact-repeat key, a target name, or a cyclic-cycle key) instead
+        # of one global bool: a nudge received while stuck on target X no
+        # longer causes an immediate hard-terminate the first time the
+        # agent merely struggles with an UNRELATED target Y (observed:
+        # sqlite C9NYKyU, EX92BKr).
+        stuck_nudged: set[str] = set()
 
         # §2.1 (tightened, v0.4 spec) — same completion-evidence gate as
         # BaselineAgent: one nudge on the first task_complete while
@@ -804,12 +859,25 @@ class StructuredToolAgent(BaseAgent):
                     target_is_stuck = (
                         target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
                     )
+                    cyclic_target_history.append(target)
 
                 exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
+                cyclic_cycle = find_cyclic_multi_target_loop(
+                    cyclic_target_history, CYCLIC_LOOP_WINDOW
+                )
 
-                if exact_repeat_stuck or target_is_stuck:
-                    if not stuck_nudged:
-                        stuck_nudged = True
+                if exact_repeat_stuck:
+                    trigger_key = "__exact_repeat__"
+                elif target_is_stuck:
+                    trigger_key = target
+                elif cyclic_cycle:
+                    trigger_key = "__cyclic__:" + ",".join(cyclic_cycle)
+                else:
+                    trigger_key = None
+
+                if trigger_key is not None:
+                    if trigger_key not in stuck_nudged:
+                        stuck_nudged.add(trigger_key)
                         if exact_repeat_stuck:
                             self.logger.warning(
                                 "turn %d: stuck loop detected (same %s, "
@@ -820,7 +888,7 @@ class StructuredToolAgent(BaseAgent):
                                 repeat_count + 1,
                             )
                             nudge_content = STUCK_LOOP_MESSAGE
-                        else:
+                        elif target_is_stuck:
                             self.logger.warning(
                                 "turn %d: stuck loop detected (%d "
                                 "unproductive attempts against target %r), "
@@ -831,6 +899,17 @@ class StructuredToolAgent(BaseAgent):
                             )
                             nudge_content = TARGET_STUCK_LOOP_MESSAGE.format(
                                 target=target
+                            )
+                        else:
+                            self.logger.warning(
+                                "turn %d: cyclic multi-target loop detected "
+                                "(cycling through %r), sending nudge",
+                                turns,
+                                cyclic_cycle,
+                            )
+                            nudge_content = CYCLIC_LOOP_MESSAGE.format(
+                                n=len(cyclic_cycle),
+                                targets=", ".join(cyclic_cycle),
                             )
                         messages.append({"role": "user", "content": nudge_content})
                     else:

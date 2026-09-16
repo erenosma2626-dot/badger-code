@@ -158,6 +158,14 @@ guessing at a partial search, or reconsider whether \
 {target} is even the right target for what you're looking for.\
 """
 
+CYCLIC_LOOP_MESSAGE = """\
+You've been cycling between the same {n} targets ({targets}) for multiple \
+full rounds without resolving any of them — going around this loop again \
+will not change the outcome. Stop cycling: pick ONE of these targets, \
+actually resolve it completely (make the edit, run the fix) before \
+touching any of the others again.\
+"""
+
 COMPLETION_EVIDENCE_MESSAGE = """\
 You're declaring the task complete, but nothing since your last file edit \
 has verified it worked (no test run, no re-read of the file, no execution \
