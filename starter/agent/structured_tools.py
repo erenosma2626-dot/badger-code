@@ -301,12 +301,22 @@ async def read_file(
     path_b64 = base64.b64encode(path.encode("utf-8")).decode("ascii")
     read_cmd = (
         "if command -v python3 >/dev/null 2>&1; then "
-        f"python3 -c \"import base64,pathlib,sys; "
+        f"python3 -c \""
+        f"import base64,pathlib,sys; "
         f"p = pathlib.Path(base64.b64decode('{path_b64}').decode('utf-8')); "
+        f"if not p.exists(): sys.stderr.write(f'No such file: {{p}}\\n'); sys.exit(1); "
+        f"if p.is_dir(): sys.stderr.write(f'Is a directory: {{p}}\\n'); sys.exit(1); "
         f"sys.stdout.write(base64.b64encode(p.read_bytes()).decode('ascii'))\"; "
+        "elif command -v base64 >/dev/null 2>&1; then "
+        f"__rf_path=\"$(printf '%s' '{path_b64}' | base64 -d 2>/dev/null || printf '%s' '{path_b64}' | base64 -D 2>/dev/null)\"; "
+        "if [ ! -e \"$__rf_path\" ]; then "
+        "echo \"No such file: $__rf_path\" >&2; exit 1; "
+        "elif [ -d \"$__rf_path\" ]; then "
+        "echo \"Is a directory: $__rf_path\" >&2; exit 1; "
+        "fi; "
+        "base64 < \"$__rf_path\" | tr -d '\\n'; "
         "else "
-        f"__rf_path=\"$(printf '%s' '{path_b64}' | base64 -d)\" && "
-        "base64 \"$__rf_path\" | tr -d '\\n'; "
+        "echo 'no python3 or base64 available in container' >&2; exit 127; "
         "fi"
     )
     try:
@@ -317,18 +327,32 @@ async def read_file(
         )
 
     if result.return_code != 0:
+        err_msg = (result.stderr or "").strip() or (result.stdout or "").strip()
         return ExecutionReceipt(
             tool="read_file",
             exit_code=result.return_code,
-            stderr_tail=_tail(result.stderr or ""),
+            stderr_tail=_tail(err_msg),
+            error=err_msg or f"read_file failed with exit code {result.return_code}",
         )
 
+    stdout_text = (result.stdout or "").strip()
     try:
-        raw = base64.b64decode((result.stdout or "").strip())
+        raw = base64.b64decode(stdout_text)
         text = raw.decode("utf-8", errors="replace")
     except Exception as exc:
+        err_text = (result.stderr or "").strip() or stdout_text
+        combined = f"{stdout_text} {result.stderr or ''}".lower()
+        if "no such file" in combined or "not found" in combined:
+            msg = f"No such file: {path}"
+        elif "is a directory" in combined:
+            msg = f"Is a directory: {path}"
+        else:
+            msg = f"No such file: {path}" if not stdout_text else f"decode failed: {exc}"
         return ExecutionReceipt(
-            tool="read_file", exit_code=result.return_code, error=f"decode failed: {exc}"
+            tool="read_file",
+            exit_code=1 if result.return_code == 0 else result.return_code,
+            error=msg,
+            stderr_tail=_tail(err_text),
         )
 
     ref = _store_output(text)

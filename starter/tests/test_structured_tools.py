@@ -195,3 +195,92 @@ def test_write_file_fails_loudly_when_neither_python3_nor_base64_exist(tmp_path)
     assert receipt.exit_code == 127
     assert "no python3 or base64 available" in receipt.stderr_tail
     assert not target.exists()
+
+
+def test_read_file_nonexistent_file_in_minimal_env_fails_cleanly(tmp_path):
+    """Madde 2: In a minimal environment without python3 (e.g. sqlite-with-gcov/C9NYKyU),
+    reading a nonexistent file must fail with non-zero exit_code and a clear
+    'No such file' message, never exit 0 or 'decode failed: Incorrect padding'."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "printf", "tr"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    missing = tmp_path / "missing.txt"
+
+    receipt = asyncio.run(read_file(env, str(missing), timeout_sec=10))
+
+    assert receipt.exit_code != 0, f"Expected non-zero exit_code, got {receipt.exit_code}"
+    err = (receipt.error or "") + " " + receipt.stderr_tail
+    assert "no such file" in err.lower() or "not found" in err.lower()
+    assert "incorrect padding" not in err.lower()
+    assert "decode failed" not in err.lower()
+
+
+def test_read_file_existing_file_in_minimal_env_succeeds(tmp_path):
+    """Regression test: reading an existing file in a minimal environment succeeds."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "printf", "tr"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "existing.txt"
+    target.write_text("hello from minimal read\n")
+
+    receipt = asyncio.run(read_file(env, str(target), timeout_sec=10))
+
+    assert receipt.exit_code == 0
+    assert receipt.stdout_tail == "hello from minimal read\n"
+    assert receipt.error is None
+
+
+def test_read_file_handles_stdout_merged_error_without_decode_failure():
+    """Madde 2: When an execution environment merges stderr into stdout with return code 0,
+    read_file must detect the 'no such file' error instead of raising 'decode failed: Incorrect padding'."""
+    env = FakeEnvironment(
+        stdout="base64: /app/sqlite/configure.ac: No such file or directory\n",
+        stderr="",
+        return_code=0,
+    )
+    receipt = asyncio.run(read_file(env, "/app/sqlite/configure.ac", timeout_sec=10))
+
+    assert receipt.exit_code != 0
+    assert "no such file" in (receipt.error or "").lower()
+    assert "incorrect padding" not in (receipt.error or "").lower()
+    assert "decode failed" not in (receipt.error or "").lower()
+
+
+def test_read_file_nonexistent_file_with_python3_env_fails_cleanly(tmp_path):
+    """Madde 2: When python3 is present, nonexistent file also fails cleanly with non-zero exit."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "python3"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    missing = tmp_path / "missing.txt"
+
+    receipt = asyncio.run(read_file(env, str(missing), timeout_sec=10))
+
+    assert receipt.exit_code != 0
+    err = (receipt.error or "") + " " + receipt.stderr_tail
+    assert "no such file" in err.lower() or "not found" in err.lower()
+    assert "incorrect padding" not in err.lower()
+
+
+def test_read_file_empty_file_succeeds(tmp_path):
+    """Empty files (0 bytes) are valid files and should read cleanly with exit 0."""
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "printf", "tr"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "empty.txt"
+    target.write_text("")
+
+    receipt = asyncio.run(read_file(env, str(target), timeout_sec=10))
+
+    assert receipt.exit_code == 0
+    assert receipt.stdout_tail == ""
+    assert receipt.content_bytes == 0
+    assert receipt.error is None
+
+
+def test_read_file_has_python3_base64_fallback_chain():
+    """read_file must have the same command -v python3 / command -v base64 probe chain as write_file."""
+    env = FakeEnvironment(stdout="", return_code=0)
+    asyncio.run(read_file(env, "/tmp/example.txt", timeout_sec=30))
+
+    cmd = env.last_command
+    assert "command -v python3" in cmd, "must probe for python3 before assuming it exists"
+    assert "command -v base64" in cmd, "must probe for base64 before assuming it exists"
+    assert "no python3 or base64 available" in cmd, "must fail loudly if neither tool exists"
+
+
