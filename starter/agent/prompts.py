@@ -120,7 +120,14 @@ before assuming either way (see STRATEGY step 6).
 turn does not persist to the next turn; you start back wherever the \
 container's default working directory is. If you need to operate in a \
 different directory, either chain it in the SAME command (`cd X && Y`) \
-or use absolute paths instead of relying on a previous `cd`.
+or use absolute paths instead of relying on a previous `cd`. \
+Similarly, `export PATH=...` or setting environment variables ONLY affects \
+that specific shell invocation and does NOT persist to subsequent commands \
+or to external verification processes (such as an external verifier). If a \
+tool, binary, or library must be discoverable in PATH across separate commands \
+or by an external verifier, use a permanent mechanism (such as symlinking into \
+`/usr/local/bin` or `/usr/bin`, or configuring and sourcing a shell profile) \
+rather than relying on a temporary `export`.
 7. If output ordering matters in a task (e.g. date-ordered list, log \
 summary table), do NOT use Python `set` — iteration order of sets is \
 not guaranteed and you may produce correct data in the wrong order. Use \
@@ -135,7 +142,13 @@ exceed output token limits and truncate your response. Instead: (a) extract \
 raw matches with a simpler regex and do the counting/filtering outside \
 regex (e.g. in Python code), or (b) move the counting constraint outside \
 the regex entirely.
-10. When the task is fully complete, respond with exactly the following, \
+10. If a task requires processing multiple (e.g. 5+) similar or homogenous \
+files (such as log files, test cases, or data tables), do NOT inspect or \
+read them one by one across separate turns. Instead, write and execute a single \
+script (using loops or glob patterns in Python or bash) to programmatically \
+process all files in batch — this conserves turn and token budgets and is \
+far more reliable.
+11. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -222,7 +235,13 @@ never use editors or pagers. Long-running commands are killed after a
 timeout — prefer fast, targeted commands. Each terminal_exec call is a
 SEPARATE shell invocation — a `cd` in one call does not persist to the
 next one; if you need a different working directory, chain it in the SAME
-command (`cd X && Y`) or use absolute paths. If output ordering matters
+command (`cd X && Y`) or use absolute paths. Similarly, `export PATH=...` or
+setting environment variables ONLY affects that specific call and does NOT
+persist to subsequent commands or to an external verification process (such as
+an external verifier); if a tool, binary, or library must be permanently
+discoverable in PATH, use a permanent mechanism (such as symlinking into
+`/usr/local/bin` or `/usr/bin`, or configuring and sourcing a shell profile)
+rather than relying on a temporary `export`. If output ordering matters
 in a task (e.g. date-ordered list, log summary table), do NOT use
 Python `set` — iteration order of sets is not guaranteed and you may
 produce correct data in the wrong order; use `list` or sort explicitly.
@@ -235,6 +254,12 @@ extremely long regexes (thousands of characters) that can exceed output
 token limits and truncate your response. Instead: (a) extract raw matches
 with a simpler regex and do the counting/filtering outside regex (e.g. in
 Python code), or (b) move the counting constraint outside the regex entirely.
+If a task requires processing multiple (e.g. 5+) similar or homogenous files
+(such as log files, test cases, or data tables), do NOT read or inspect them
+one by one across separate turns. Instead, write and execute a single script
+(using loops or glob patterns in Python or bash) to programmatically process
+all files in batch — this conserves turn and token budgets and is far more
+reliable.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
