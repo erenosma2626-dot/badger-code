@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Badger Code v0.5.1 Canary Raporu</title>
+  <style>
+    :root {
+      --bg-color: #ffffff;
+      --text-color: #1a1a1a;
+      --text-muted: #555555;
+      --border-color: #e0e0e0;
+      --table-header-bg: #f5f5f5;
+      --table-row-even: #fafafa;
+      --code-bg: #f0f0f0;
+      --blockquote-border: #0066cc;
+      --blockquote-bg: #f8f9fa;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-color: #121212;
+        --text-color: #e0e0e0;
+        --text-muted: #aaaaaa;
+        --border-color: #333333;
+        --table-header-bg: #1e1e1e;
+        --table-row-even: #181818;
+        --code-bg: #222222;
+        --blockquote-border: #4da3ff;
+        --blockquote-bg: #1a1a1a;
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: var(--text-color);
+      background-color: var(--bg-color);
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      border-bottom: 2px solid var(--border-color);
+      padding-bottom: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.4rem;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    h3 {
+      font-size: 1.2rem;
+      margin-top: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    p, ul, ol, blockquote, table {
+      margin-bottom: 1rem;
+    }
+
+    ul, ol {
+      padding-left: 2rem;
+    }
+
+    li {
+      margin-bottom: 0.4rem;
+    }
+
+    blockquote {
+      border-left: 4px solid var(--blockquote-border);
+      background-color: var(--blockquote-bg);
+      margin: 1rem 0;
+      padding: 0.75rem 1rem;
+    }
+
+    blockquote p:last-child {
+      margin-bottom: 0;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.9em;
+      background-color: var(--code-bg);
+      padding: 0.2em 0.4em;
+      border-radius: 3px;
+    }
+
+    pre {
+      background-color: var(--code-bg);
+      padding: 1rem;
+      overflow-x: auto;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+    }
+
+    pre code {
+      background-color: transparent;
+      padding: 0;
+      font-size: 0.9em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 0.75rem 1rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background-color: var(--table-header-bg);
+      font-weight: 600;
+    }
+
+    tbody tr:nth-child(even) {
+      background-color: var(--table-row-even);
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--border-color);
+      margin: 2rem 0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Badger Code v0.5.1 Canary Raporu</h1>
+
+  <p>
+    <strong>Tarih:</strong> 2026-09-17<br>
+    <strong>Kapsam:</strong> v0.5.1 Canary (Terminal-Bench 2.1, n=3, 21 trial) vs v0.5 Baseline (Terminal-Bench 2.1, n=3, 24 trial)<br>
+    <strong>Kaynak Raporlar:</strong> <code>docs/worker1-agy-v0511-canary-analysis-batchA.md</code>, <code>docs/worker1-agy-v0511-canary-analysis-batchB.md</code><br>
+    <strong>Ham Veriler:</strong> <code>jobs/v051-canary-run1/2/3/result.json</code>, <code>starter/jobs/v05-baseline-run1/2/3/result.json</code>
+  </p>
+
+  <hr>
+
+  <h2>1. Genel Sonuçlar ve v0.5 Baseline Kıyaslaması</h2>
+
+  <p>v0.5.1 canary koşusu (7 görev &times; n=3 = 21 trial) tamamlanmıştır.</p>
+
+  <h3>Ham Sonuçlar (Run Bazlı)</h3>
+  <ul>
+    <li><strong>Run 1 (<code>jobs/v051-canary-run1</code>):</strong> 0 PASS, 4 FAIL, 3 Exception (<code>AgentTimeoutError</code>: <code>regex-log</code>, <code>build-cython-ext</code>, <code>sqlite-with-gcov</code> &mdash; 900s duvar saati altyapı kesintisi).</li>
+    <li><strong>Run 2 (<code>jobs/v051-canary-run2</code>):</strong> 1 PASS (<code>configure-git-webserver</code>), 6 FAIL, 0 Exception.</li>
+    <li><strong>Run 3 (<code>jobs/v051-canary-run3</code>):</strong> 1 PASS (<code>log-summary-date-ranges</code>), 5 FAIL, 1 Exception (<code>AgentTimeoutError</code>: <code>regex-log</code>).</li>
+  </ul>
+
+  <h3>Gerçek vs Ham Pass-Rate</h3>
+  <ul>
+    <li><strong>Ham Pass-Rate:</strong> 2 / 21 = <strong>%9.5</strong></li>
+    <li><strong>Altyapı Kesintisi Hariç Gerçek Pass-Rate:</strong> Run 1'deki 3 <code>AgentTimeoutError</code> (altyapı/duvar-saati tavanı) hariç tutulduğunda: <strong>2 / 18 = %11.1</strong></li>
+    <li>
+      <strong>v0.5 Baseline ile Kıyaslama:</strong>
+      <ul>
+        <li>v0.5 Baseline: 3 / 24 = <strong>%12.5</strong> (Skorun tamamı tek bir görevden gelmişti: <code>configure-git-webserver</code> 3/3; kalan 7 görev 0/3).</li>
+        <li>v0.5.1 Canary: 2 / 18 = <strong>%11.1</strong> (Skor 2 farklı göreve yayıldı: <code>configure-git-webserver</code> 1/3, <code>log-summary-date-ranges</code> 1/3).</li>
+        <li><strong>Kritik Kazanım:</strong> <code>log-summary-date-ranges</code> görevi projenin başından beri ilk kez çözülmüş ve 1.0 almıştır.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <hr>
+
+  <h2>2. Görev-Bazlı Karşılaştırma Tablosu</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Görev</th>
+        <th>v0.5 Baseline</th>
+        <th>v0.5.1 Canary</th>
+        <th>Değişim Yönü</th>
+        <th>Kök Neden / Durum Özeti</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>configure-git-webserver</strong></td>
+        <td>3/3 PASS (1.0, 1.0, 1.0)</td>
+        <td>1/3 PASS (Run1: 0.0, Run2: 1.0, Run3: 0.0)</td>
+        <td>🟡 Varyans (Regresyon Değil)</td>
+        <td>Gerçek regresyon değil, model stokastikliği: <code>openssh-server</code> kurulmadığında model <code>user@server</code> push doğrulamasına saplanıp <code>/etc/hosts</code>'u bozuyor ve Nginx <code>alias</code> hatasıyla 404 kısırdöngüsüne giriyor; <code>openssh-server</code> kurulunca (Run 2) sorunsuz 1.0 ile geçiyor. v0.5.1 değişiklikleriyle nedensel ilgisi yok.</td>
+      </tr>
+      <tr>
+        <td><strong>sqlite-with-gcov</strong></td>
+        <td>0/3 (stuck-loop / missing)</td>
+        <td>0/3 (Run1: 900s timeout, Run2: 15 tur stuck-loop, Run3: 20 tur stuck-loop)</td>
+        <td>⚪ Nötr (Aynı Seviye)</td>
+        <td>PATH symlink prompt notu Run 1'de harfiyen uygulandı (<code>ln -sf /usr/local/bin/sqlite3</code>), ancak model binary üzerine recursive wrapper yazıp timeout aldı; Run 2 ve 3'te ise <code>./configure</code> geçersiz bayrakları yüzünden derleme/PATH aşamasına gelinemedi.</td>
+      </tr>
+      <tr>
+        <td><strong>chess-best-move</strong></td>
+        <td>0/3 (3/3 <code>completion_rejected</code> hard reject)</td>
+        <td>0/3 (3/3 <code>acknowledged: true</code> kanıt onaylı)</td>
+        <td>🟢 Pozitif İlerleme</td>
+        <td>v0.5'teki guardrail sert reddi tamamen aşıldı (0/3 reject); model Python/OpenCV ile doğrulama yapıp bitirdi. Başarısızlık saf vision/model yetersizliğidir (Kategori C).</td>
+      </tr>
+      <tr>
+        <td><strong>regex-log</strong></td>
+        <td>0/3 (stuck-loop, timeout, reject)</td>
+        <td>0/3 (Run1: 29 tur timeout, Run2: 100 tur max_turns, Run3: 11 tur timeout)</td>
+        <td>🔴 Negatif (Scaffold Bug + Token Sınırı)</td>
+        <td><code>agent.py:831</code>'de <code>write_file</code> stuck-loop denetimi dışında bırakıldığı için Run 2 95 tur boyunca aynı çağrıyı yapıp 100 tura gitti; Run 1 ve Run 3'te 4096 token sınırı patolojik regex'te <code>finish_reason=length</code> üreterek 900s timeout yarattı.</td>
+      </tr>
+      <tr>
+        <td><strong>build-cython-ext</strong></td>
+        <td>0/3 (50, 57, 23 tur stuck-loop)</td>
+        <td>0/3 (Run1: 32 tur timeout, Run2: 19 tur stuck-loop, Run3: 65 tur stuck-loop)</td>
+        <td>⚪ Nötr (Aynı Sorun)</td>
+        <td><code>setuptools</code> eksikliği devam ediyor: Aktif Python <code>/usr/local/bin/python3</code>, model ise <code>apt-get install python3-setuptools</code> ile Debian sistem python'una kurduğu için modül bulunamıyor.</td>
+      </tr>
+      <tr>
+        <td><strong>fix-code-vulnerability</strong></td>
+        <td>0/3 (24, 26, 17 tur stuck-loop)</td>
+        <td>0/3 (Run1: 17 tur, Run2: 24 tur, Run3: 24 tur)</td>
+        <td>🟢 Pozitif Tutarlılık</td>
+        <td><code>CYCLIC_LOOP_WINDOW=44</code> döngüleri 17-24 turda erkenden yakalayarak 100 turluk maliyet faciasını kesin olarak engellemeye devam ediyor.</td>
+      </tr>
+      <tr>
+        <td><strong>log-summary-date-ranges</strong></td>
+        <td>0/3 (Run 3 100 tur dosya-dosya okuma)</td>
+        <td><strong>1/3 PASS</strong> (Run1: 6 tur, Run2: 8 tur, Run3: 7 tur PASS 1.0)</td>
+        <td>🟢 Çok Güçlü İyileşme</td>
+        <td>"5+ dosya varsa script yaz" prompt notu %100 çalıştı: Turlar 100'den ortalama 7 tura indi (%93 tasarruf) ve Run 3'te 1.0 PASS alındı.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <h2>3. Öne Çıkan En Kritik İki Bulgu</h2>
+
+  <h3>(a) <code>agent.py:831</code>'in <code>write_file</code>'ı Stuck-Loop Denetiminin Dışında Bırakması (Scaffold Kör Noktası)</h3>
+  <ul>
+    <li>
+      <strong>Bulgu:</strong> <code>starter/agent/agent.py</code> Satır 831'de yer alan denetim:
+      <pre><code>if name in ("terminal_exec", "read_file"):</code></pre>
+      <code>write_file</code> aracını tamamen dışarıda bırakmaktadır.
+    </li>
+    <li>
+      <strong>Somut Etkisi:</strong> <code>regex-log</code> Run 2'de model Turn 5'ten (Msg 10) Turn 100'e (Msg 200) kadar <strong>tam 95 tur boyunca</strong> <code>/app/regex.txt</code> dosyasına birebir aynı parametrelerle <code>write_file</code> yazmıştır. Ancak <code>write_file</code> bu bloğa girmediği için ne <code>fingerprint</code> üretilmiş, ne <code>exact_repeat_stuck</code> ne de <code>cyclic_target_history</code> güncellenmiştir.
+    </li>
+    <li>
+      <strong>Durum:</strong> Bu durum gerçek bir scaffold bug'ıdır / kör noktadır. <strong>v0.5.2'de kodlandı</strong> (commit <code>9b76e0b</code>, `feature/v0.5.2-fixes`), review bekliyor.
+    </li>
+  </ul>
+
+  <blockquote>
+    <p><strong>Özet Değerlendirme:</strong> <code>write_file</code> çağrılarının döngü dedektörüne dahil edilmemesi, modelin aynı içerikle sürekli dosya yazarak 100 tura kadar tükenmesine yol açan kritik bir scaffold kör noktasıdır.</p>
+  </blockquote>
+
+  <h3>(b) <code>LLM_MAX_TOKENS=4096</code>'nın <code>regex-log</code> Görevinde <code>finish_reason=length</code> Tetiklemesi</h3>
+  <ul>
+    <li>
+      <strong>Bulgu:</strong> Model, satırdaki son tarihi eşleştirmek için yüzlerce negatif lookahead (<code>(?!\S*\S*\S*...)</code>) içeren patolojik regex'ler üretmeye kalktığında 4096 token sınırına çarpmaktadır.
+    </li>
+    <li>
+      <strong>Somut Etkisi:</strong>
+      <ul>
+        <li><code>regex-log</code> Run 3'te 11 turun <strong>11'inde de</strong> istisnasız <code>finish_reason=length</code> gerçekleşmiş ve her tur tam 4096 token üretilmiştir (Toplam 45.056 token). Tool-call JSON'ı yarıda kesildiği için harness geçerli bir araç çağrısı algılayamamış, her tur ~80s yanıt süresi alarak 11. turda 900s duvar saati aşılmıştır (<code>AgentTimeoutError</code>).</li>
+        <li>Run 1'de de 29 turun 14'ü <code>finish_reason=length</code> ile kesilmiştir.</li>
+      </ul>
+    </li>
+    <li>
+      <strong>Durum:</strong> Sorunun kökü modelin devasa regex üretme davranışıdır (polyglot-c-py'deki gibi); ancak 4096 tavanı bu kesilmeyi garantilemektedir. <strong>v0.5.2'de telafi edici prompt notu kodlandı</strong> (commit <code>39f3922</code>), review bekliyor — token limitine dokunulmadı.
+    </li>
+  </ul>
+
+  <blockquote>
+    <p><strong>Özet Değerlendirme:</strong> 4096 token tavanı kesilen JSON yanıtlarına ve geçersiz araç çağrılarına yol açarak altyapı kaynaklı 900s duvar saati aşımıyla (<code>AgentTimeoutError</code>) sonuçlanmaktadır.</p>
+  </blockquote>
+
+  <hr>
+
+  <h2>4. v0.5.2'de Kodlanan Fix'ler (Review Bekliyor)</h2>
+
+  <ol>
+    <li>
+      <strong><code>write_file</code> blind-spot düzeltmesi</strong> (commit <code>9b76e0b</code>) — <code>write_file</code> çağrıları artık fingerprint/tekrar/döngüsel-hedef denetimine dahil.
+    </li>
+    <li>
+      <strong>Parçalı-yazma / regex prompt kuralı</strong> (commit <code>39f3922</code>) — devasa negatif-lookahead regex yerine düz Python parsing önerisi eklendi.
+    </li>
+    <li>
+      <strong><code>build-cython-ext</code> Python3 path rehberliği</strong> (commit <code>4242899</code>) — sistem paket yöneticisiyle kurulan modüllerin aktif yorumlayıcıya gitmeyebileceği, <code>python3 -m pip install</code> tercih edilmesi notu eklendi.
+    </li>
+  </ol>
+  <p><em>Branch: <code>feature/v0.5.2-fixes</code>, 122/122 test geçti (0 regresyon). Henüz main'e merge edilmedi, bağımsız review bekliyor.</em></p>
+
+</body>
+</html>
