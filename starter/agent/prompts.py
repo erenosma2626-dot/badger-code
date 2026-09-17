@@ -135,20 +135,28 @@ not guaranteed and you may produce correct data in the wrong order. Use \
 8. Before completing the task, clean up temporary or binary files produced \
 during compilation/build (e.g. gcc output, .o files) — ensure only the \
 expected files remain in the target output directory.
-9. If you need to express a counting constraint (such as "at most/at least \
-N occurrences") with regex, avoid chaining dozens of negative lookaheads — \
-this produces extremely long regexes (thousands of characters) that can \
-exceed output token limits and truncate your response. Instead: (a) extract \
-raw matches with a simpler regex and do the counting/filtering outside \
-regex (e.g. in Python code), or (b) move the counting constraint outside \
-the regex entirely.
+9. Avoid constructing massive regex patterns or chaining numerous negative \
+lookaheads (such pathological regexes easily push token limits and cause \
+finish_reason=length truncation). If you need to express complex matching, \
+filtering, or counting constraints (such as "at most/at least N occurrences"), \
+do NOT try to force all logic into a single monolithic regex. Instead, use a \
+simple regex or plain Python code to do the work: parse line-by-line, use \
+straightforward string splitting or datetime/date parsing, and handle \
+filtering or counting logic directly in Python code.
 10. If a task requires processing multiple (e.g. 5+) similar or homogenous \
 files (such as log files, test cases, or data tables), do NOT inspect or \
 read them one by one across separate turns. Instead, write and execute a single \
 script (using loops or glob patterns in Python or bash) to programmatically \
 process all files in batch — this conserves turn and token budgets and is \
 far more reliable.
-11. When the task is fully complete, respond with exactly the following, \
+11. When installing Python packages or build dependencies, be aware that installing \
+via a system package manager (e.g. `apt-get install python3-...`) installs into the \
+system Python directories, which may NOT be in the module search path of the currently \
+active `python3` interpreter (confirm with `which python3`, which may point to an \
+alternative installation like `/usr/local/bin/python3` or a virtual environment). To ensure \
+a package or module is available to the active interpreter, prefer installing directly into it \
+with `python3 -m pip install <package>` rather than relying on system package managers.
+12. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -247,19 +255,26 @@ Python `set` — iteration order of sets is not guaranteed and you may
 produce correct data in the wrong order; use `list` or sort explicitly.
 Before completing the task, clean up temporary or binary files produced
 during compilation/build (e.g. gcc output, .o files) — ensure only the
-expected files remain in the target output directory. If you need to
-express a counting constraint (such as "at most/at least N occurrences")
-with regex, avoid chaining dozens of negative lookaheads — this produces
-extremely long regexes (thousands of characters) that can exceed output
-token limits and truncate your response. Instead: (a) extract raw matches
-with a simpler regex and do the counting/filtering outside regex (e.g. in
-Python code), or (b) move the counting constraint outside the regex entirely.
+expected files remain in the target output directory. Avoid constructing massive regex patterns or chaining numerous negative \
+lookaheads (such pathological regexes easily push token limits and cause \
+finish_reason=length truncation). If you need to express complex matching, \
+filtering, or counting constraints (such as "at most/at least N occurrences"), \
+do NOT try to force all logic into a single monolithic regex. Instead, use a \
+simple regex or plain Python code to do the work: parse line-by-line, use \
+straightforward string splitting or datetime/date parsing, and handle \
+filtering or counting logic directly in Python code.
 If a task requires processing multiple (e.g. 5+) similar or homogenous files
 (such as log files, test cases, or data tables), do NOT read or inspect them
 one by one across separate turns. Instead, write and execute a single script
 (using loops or glob patterns in Python or bash) to programmatically process
 all files in batch — this conserves turn and token budgets and is far more
-reliable.
+reliable. When installing Python packages or build dependencies, be aware that \
+installing via a system package manager (e.g. `apt-get install python3-...`) \
+installs into the system Python directories, which may NOT be in the module search \
+path of the currently active `python3` interpreter (confirm with `which python3`, \
+which may point to an alternative installation like `/usr/local/bin/python3` or a \
+virtual environment). To ensure packages are available to the active interpreter, \
+prefer installing directly into it with `python3 -m pip install <package>`.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\

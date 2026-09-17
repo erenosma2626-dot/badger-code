@@ -588,19 +588,20 @@ class StructuredToolAgent(BaseAgent):
 
         # §1.1 madde 2 / §2.3 (v0.4 spec) — evidence-based stuck-loop
         # detection, ported from BaselineAgent and applied to
-        # terminal_exec/read_file (write_file's success/failure is already
-        # covered by verification_status above). Three triggers (v0.4.1
-        # madde 1 adds the third), any one of them nudges once then
-        # hard-terminates on repeat:
-        # (a) exact repeat — same tool+command/path+exit_code+output_hash;
+        # terminal_exec/read_file/write_file (v0.5.2 fix 1 closes the write_file
+        # blind spot where 95 turns repeated identical write_file calls).
+        # Three triggers (v0.4.1 madde 1 adds the third), any one of them
+        # nudges once then hard-terminates on repeat:
+        # (a) exact repeat — same tool+command/path+exit_code+output_hash
+        #     (for write_file: content_sha256 + stderr_tail);
         # (b) same-target — N unproductive attempts against the same
-        # extracted file/path even if the command text varies each turn;
+        #     extracted file/path even if the command text varies each turn;
         # (c) cyclic_multi_target_loop — the agent cycles between N>=2
-        # DIFFERENT targets (A->B->C->D->A->B->C->D->...) for two full
-        # laps, never revisiting any single one enough to trip (b) and
-        # never repeating a command verbatim enough to trip (a). Observed
-        # in fix-code-vulnerability/build-cython-ext trials: 9-10 files
-        # cycled through for 100 turns, write_file never called.
+        #     DIFFERENT targets (A->B->C->D->A->B->C->D->...) for two full
+        #     laps, never revisiting any single one enough to trip (b) and
+        #     never repeating a command verbatim enough to trip (a). Observed
+        #     in fix-code-vulnerability/build-cython-ext trials: 9-10 files
+        #     cycled through for 100 turns, write_file never called.
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         target_attempt_counts: dict[str, int] = {}
         cyclic_target_history: list[str] = []
@@ -828,12 +829,16 @@ class StructuredToolAgent(BaseAgent):
                     }
                 )
 
-            if name in ("terminal_exec", "read_file"):
+            if name in ("terminal_exec", "read_file", "write_file"):
                 command_or_path = (
                     args.get("command", "") if name == "terminal_exec"
                     else args.get("path", "")
                 )
-                combined_output = receipt.stdout_tail + receipt.stderr_tail
+                combined_output = (
+                    (receipt.content_sha256 or "") + receipt.stderr_tail
+                    if name == "write_file"
+                    else receipt.stdout_tail + receipt.stderr_tail
+                )
                 fingerprint = (
                     name,
                     command_or_path,
@@ -844,12 +849,12 @@ class StructuredToolAgent(BaseAgent):
                 recent_fingerprints.append(fingerprint)
 
                 target = (
-                    command_or_path if name == "read_file"
+                    command_or_path if name in ("read_file", "write_file")
                     else extract_target(command_or_path)
                 )
                 target_is_stuck = False
                 if target:
-                    cmd = None if name == "read_file" else command_or_path
+                    cmd = None if name in ("read_file", "write_file") else command_or_path
                     if is_unproductive_attempt(
                         receipt.exit_code, combined_output, command=cmd
                     ):

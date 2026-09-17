@@ -32,6 +32,8 @@ class FakeEnvironment:
     async def exec(self, command: str, timeout_sec: int) -> FakeExecResult:
         self.calls.append(command)
         if "__AGENT_CWD_AFTER__" not in command:
+            if "WRITE_OK" in command or "python3" in command or "base64" in command:
+                return FakeExecResult("WRITE_OK\n", "", 0)
             return FakeExecResult("__AGENT_CWD_AFTER__:/app\n", "", 0)
         if self._idx < len(self._results):
             result = self._results[self._idx]
@@ -150,3 +152,78 @@ def test_varying_terminal_exec_command_against_same_target_triggers_stuck_loop(m
 
     assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
     assert ctx.metadata["turns"] < 20
+
+
+def test_identical_write_file_repeated_triggers_stuck_loop(monkeypatch):
+    """v0.5.2 fix 1: write_file repeating the exact same path and content
+    must trigger stuck-loop detection rather than looping indefinitely."""
+    env = FakeEnvironment([])
+    turns = [
+        (
+            "",
+            [
+                {
+                    "id": f"c{i}",
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "/app/regex.txt",
+                        "content": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                    },
+                }
+            ],
+        )
+        for i in range(10)
+    ]
+
+    ctx = run_structured_agent(monkeypatch, env, turns)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+    assert ctx.metadata["turns"] < 20
+
+
+def test_varying_content_write_file_does_not_trigger_exact_repeat(monkeypatch):
+    """v0.5.2 fix 1: editing the same file with DIFFERENT content is progress
+    and must not be flagged as an exact-repeat stuck loop."""
+    env = FakeEnvironment([])
+    turns = [
+        (
+            "",
+            [
+                {
+                    "id": f"c{i}",
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "/app/script.py",
+                        "content": f"# attempt {i}\nprint({i})\n",
+                    },
+                }
+            ],
+        )
+        for i in range(4)
+    ] + [
+        (
+            "",
+            [
+                {
+                    "id": "c_verify",
+                    "name": "terminal_exec",
+                    "arguments": {"command": "python3 /app/script.py"},
+                }
+            ],
+        ),
+        (
+            "",
+            [
+                {
+                    "id": "c_done",
+                    "name": "task_complete",
+                    "arguments": {"evidence": "python3 script.py passed"},
+                }
+            ],
+        ),
+    ]
+
+    ctx = run_structured_agent(monkeypatch, env, turns)
+
+    assert ctx.metadata["termination_reason"] != "stuck_loop_detected"
+    assert ctx.metadata["termination_reason"] == "task_complete"
