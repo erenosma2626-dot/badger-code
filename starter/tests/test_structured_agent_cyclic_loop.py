@@ -36,6 +36,8 @@ class FakeEnvironment:
     async def exec(self, command: str, timeout_sec: int) -> FakeExecResult:
         self.calls.append(command)
         if "__AGENT_CWD_AFTER__" not in command:
+            if "WRITE_OK" in command or "python3" in command or "base64" in command:
+                return FakeExecResult("WRITE_OK\n", "", 0)
             return FakeExecResult("__AGENT_CWD_AFTER__:/app\n", "", 0)
         if self._idx < len(self._results):
             result = self._results[self._idx]
@@ -90,6 +92,13 @@ def _exec_call(i, target):
     return (
         "",
         [{"id": f"e{i}", "name": "terminal_exec", "arguments": {"command": f'grep -n "pattern_{i}" {target}'}}],
+    )
+
+
+def _write_call(i, path, content="dummy"):
+    return (
+        "",
+        [{"id": f"w{i}", "name": "write_file", "arguments": {"path": path, "content": f"{content}_{i}"}}],
     )
 
 
@@ -176,6 +185,20 @@ def test_ten_targets_cyclic_loop_triggers_stuck_loop_with_window_44(monkeypatch)
 
     assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
     assert ctx.metadata["turns"] == 30
+
+
+def test_two_full_cycles_through_four_targets_with_write_file_triggers_cyclic_loop(monkeypatch):
+    """v0.5.2 fix 1: write_file operations must be tracked in cyclic_target_history
+    so that cycling between multiple file writes triggers cyclic-loop detection."""
+    files = ["a.py", "b.py", "c.py", "d.py"] * 3
+    results = [FakeExecResult("WRITE_OK\n", "", 0) for _ in files]
+    env = FakeEnvironment(results)
+    turns = [_write_call(i, f) for i, f in enumerate(files)]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=20)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+    assert ctx.metadata["turns"] < 20
 
 
 
