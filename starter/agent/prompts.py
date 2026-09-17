@@ -149,7 +149,14 @@ read them one by one across separate turns. Instead, write and execute a single 
 script (using loops or glob patterns in Python or bash) to programmatically \
 process all files in batch — this conserves turn and token budgets and is \
 far more reliable.
-11. When the task is fully complete, respond with exactly the following, \
+11. When installing Python packages or build dependencies, be aware that installing \
+via a system package manager (e.g. `apt-get install python3-...`) installs into the \
+system Python directories, which may NOT be in the module search path of the currently \
+active `python3` interpreter (confirm with `which python3`, which may point to an \
+alternative installation like `/usr/local/bin/python3` or a virtual environment). To ensure \
+a package or module is available to the active interpreter, prefer installing directly into it \
+with `python3 -m pip install <package>` rather than relying on system package managers.
+12. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -261,7 +268,13 @@ If a task requires processing multiple (e.g. 5+) similar or homogenous files
 one by one across separate turns. Instead, write and execute a single script
 (using loops or glob patterns in Python or bash) to programmatically process
 all files in batch — this conserves turn and token budgets and is far more
-reliable.
+reliable. When installing Python packages or build dependencies, be aware that \
+installing via a system package manager (e.g. `apt-get install python3-...`) \
+installs into the system Python directories, which may NOT be in the module search \
+path of the currently active `python3` interpreter (confirm with `which python3`, \
+which may point to an alternative installation like `/usr/local/bin/python3` or a \
+virtual environment). To ensure packages are available to the active interpreter, \
+prefer installing directly into it with `python3 -m pip install <package>`.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\

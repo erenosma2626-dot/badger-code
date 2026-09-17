@@ -26,6 +26,22 @@ def test_structured_system_prompt_advises_against_pathological_regex_and_suggest
     assert "python" in lowered
 
 
+def test_baseline_system_prompt_advises_on_active_python3_interpreter_and_pip():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "apt-get" in lowered
+    assert "which python3" in lowered or "active" in lowered
+    assert "pip install" in lowered
+    assert "module" in lowered or "path" in lowered
+
+
+def test_structured_system_prompt_advises_on_active_python3_interpreter_and_pip():
+    lowered = STRUCTURED_SYSTEM_PROMPT.lower()
+    assert "apt-get" in lowered
+    assert "which python3" in lowered or "active" in lowered
+    assert "pip install" in lowered
+    assert "module" in lowered or "path" in lowered
+
+
 def test_prompts_remain_generic_and_avoid_task_names():
     for prompt in (SYSTEM_PROMPT, STRUCTURED_SYSTEM_PROMPT):
         lowered = prompt.lower()
