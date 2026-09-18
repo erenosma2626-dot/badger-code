@@ -227,3 +227,97 @@ def test_varying_content_write_file_does_not_trigger_exact_repeat(monkeypatch):
 
     assert ctx.metadata["termination_reason"] != "stuck_loop_detected"
     assert ctx.metadata["termination_reason"] == "task_complete"
+
+
+def test_sequential_append_calls_with_different_content_do_not_trigger_stuck_or_cyclic_loop(monkeypatch):
+    """v0.5.3: Appending different chunks to the same file (initial write + multiple appends)
+    is progress (file grows, hashes differ) and must NOT trigger exact-repeat, target-stuck,
+    or cyclic-loop detection."""
+    env = FakeEnvironment([])
+    # 1 initial write + 4 append chunks = 5 sequential writes to the same file
+    turns = [
+        (
+            "",
+            [
+                {
+                    "id": "c0",
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "/app/large_module.py",
+                        "content": "# Part 0: header and imports\nimport sys\n",
+                        "append": False,
+                    },
+                }
+            ],
+        )
+    ] + [
+        (
+            "",
+            [
+                {
+                    "id": f"c{i}",
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "/app/large_module.py",
+                        "content": f"# Part {i}: function def {i}\ndef func_{i}(): return {i}\n",
+                        "append": True,
+                    },
+                }
+            ],
+        )
+        for i in range(1, 5)
+    ] + [
+        (
+            "",
+            [
+                {
+                    "id": "c_verify",
+                    "name": "terminal_exec",
+                    "arguments": {"command": "python3 -c 'import large_module'"},
+                }
+            ],
+        ),
+        (
+            "",
+            [
+                {
+                    "id": "c_done",
+                    "name": "task_complete",
+                    "arguments": {"evidence": "large_module imported clean"},
+                }
+            ],
+        ),
+    ]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=15)
+
+    assert ctx.metadata["termination_reason"] != "stuck_loop_detected"
+    assert ctx.metadata["termination_reason"] == "task_complete"
+
+
+def test_identical_append_calls_repeated_still_trigger_exact_repeat_stuck_loop(monkeypatch):
+    """v0.5.3: Appending the EXACT same content chunk repeatedly to the same file
+    means the agent is stuck in an append loop — exact-repeat detector must catch it."""
+    env = FakeEnvironment([])
+    turns = [
+        (
+            "",
+            [
+                {
+                    "id": f"c{i}",
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "/app/file.txt",
+                        "content": "identical chunk\n",
+                        "append": True,
+                    },
+                }
+            ],
+        )
+        for i in range(5)
+    ]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=10)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+
