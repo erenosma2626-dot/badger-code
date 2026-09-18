@@ -773,11 +773,14 @@ class StructuredToolAgent(BaseAgent):
                     pending_verification = False
                     had_successful_test_after_edit = True
             elif name == "write_file":
+                append_val = args.get("append", False)
+                append_flag = append_val is True or str(append_val).lower() in ("true", "1")
                 receipt = await structured_write_file(
                     environment,
                     args.get("path", ""),
                     args.get("content", ""),
                     timeout_sec=COMMAND_TIMEOUT_SEC,
+                    append=append_flag,
                 )
                 has_edited = True
                 pending_verification = True

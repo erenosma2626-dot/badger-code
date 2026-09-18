@@ -83,6 +83,13 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Exact file content to write.",
                     },
+                    "append": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, append content to the end of the file "
+                            "instead of overwriting. Default is false (overwrite)."
+                        ),
+                    },
                 },
                 "required": ["path", "content"],
             },
@@ -243,27 +250,43 @@ async def terminal_exec(
 
 
 async def write_file(
-    environment: BaseEnvironment, path: str, content: str, timeout_sec: int
+    environment: BaseEnvironment,
+    path: str,
+    content: str,
+    timeout_sec: int,
+    append: bool = False,
 ) -> ExecutionReceipt:
     """Write `content` to `path` byte-exact, base64-encoded end to end so
     neither path nor content can break shell quoting (same approach as
     tools.run_write_file, kept independent so this module has no
-    dependency on the free-text parser it's meant to replace)."""
+    dependency on the free-text parser it's meant to replace).
+
+    If `append` is True, appends content to the existing file (or creates it
+    if absent). If False (default), overwrites existing content.
+    """
+    is_append = append is True or str(append).lower() in ("true", "1")
     raw = content.encode("utf-8")
     b64 = base64.b64encode(raw).decode("ascii")
     path_b64 = base64.b64encode(path.encode("utf-8")).decode("ascii")
     sha256 = hashlib.sha256(raw).hexdigest()
+
+    py_write = (
+        f"open(p, 'ab').write(base64.b64decode('{b64}'))"
+        if is_append
+        else f"p.write_bytes(base64.b64decode('{b64}'))"
+    )
+    sh_redirect = ">>" if is_append else ">"
 
     write_cmd = (
         "if command -v python3 >/dev/null 2>&1; then "
         f"python3 -c \"import base64,pathlib; "
         f"p = pathlib.Path(base64.b64decode('{path_b64}').decode('utf-8')); "
         f"p.parent.mkdir(parents=True, exist_ok=True); "
-        f"p.write_bytes(base64.b64decode('{b64}'))\" && echo WRITE_OK; "
+        f"{py_write}\" && echo WRITE_OK; "
         "elif command -v base64 >/dev/null 2>&1; then "
         f"__wf_path=\"$(printf '%s' '{path_b64}' | base64 -d)\" && "
         "mkdir -p \"$(dirname \"$__wf_path\")\" && "
-        f"printf '%s' '{b64}' | base64 -d > \"$__wf_path\" && echo WRITE_OK; "
+        f"printf '%s' '{b64}' | base64 -d {sh_redirect} \"$__wf_path\" && echo WRITE_OK; "
         "else "
         "echo 'no python3 or base64 available in container' >&2; exit 127; "
         "fi"
