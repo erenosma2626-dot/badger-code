@@ -77,6 +77,7 @@ Environment variables
 from collections import deque
 import json
 import os
+import re
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -628,6 +629,9 @@ class StructuredToolAgent(BaseAgent):
         # and must still be rejected hard.
         meaningful_action_since_nudge = False
 
+        last_truncated_target: str | None = None
+        consecutive_truncated_target_count: int = 0
+
         for _ in range(MAX_TURNS):
             turns += 1
 
@@ -679,11 +683,30 @@ class StructuredToolAgent(BaseAgent):
                     text,
                 )
                 if usage.get("finish_reason") == "length":
+                    target_match = re.search(r'["\']path["\']\s*:\s*["\']([^"\']+)["\']', text)
+                    current_target = target_match.group(1) if target_match else None
+                    if current_target and current_target == last_truncated_target:
+                        consecutive_truncated_target_count += 1
+                    else:
+                        consecutive_truncated_target_count = 1 if current_target else 0
+                        last_truncated_target = current_target
+
                     nudge_content = TRUNCATED_RESPONSE_MESSAGE
+                    if consecutive_truncated_target_count >= 2 and current_target:
+                        nudge_content += (
+                            f"\nNote: Writing to '{current_target}' appears too large for a single call "
+                            "and was repeatedly cut off. Split the file into smaller chunks: "
+                            "write the first chunk with append=false, then append subsequent chunks using append=true."
+                        )
                 else:
+                    last_truncated_target = None
+                    consecutive_truncated_target_count = 0
                     nudge_content = STRUCTURED_NUDGE_MESSAGE
                 messages.append({"role": "user", "content": nudge_content})
                 continue
+
+            last_truncated_target = None
+            consecutive_truncated_target_count = 0
 
             # Exactly one tool call per turn by prompt contract; if the
             # model sends more, only the first is executed and the rest

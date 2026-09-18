@@ -90,3 +90,29 @@ def test_finish_reason_other_still_gets_generic_nudge(monkeypatch):
     ]
     assert any(c == STRUCTURED_NUDGE_MESSAGE for c in nudge_messages)
     assert not any(TRUNCATED_RESPONSE_MESSAGE in c for c in nudge_messages)
+
+
+def test_repeated_length_truncation_on_same_write_file_target_gets_append_advice(monkeypatch):
+    env = FakeEnvironment()
+    partial_write = '{"name": "write_file", "arguments": {"path": "/app/huge.py", "content": "def massive():'
+    turns = [
+        (partial_write, [], {"prompt_tokens": 1, "completion_tokens": 1, "finish_reason": "length"}),
+        (partial_write, [], {"prompt_tokens": 1, "completion_tokens": 1, "finish_reason": "length"}),
+        ("", [{"id": "c1", "name": "task_complete", "arguments": {"evidence": "done"}}], {"prompt_tokens": 1, "completion_tokens": 1}),
+    ]
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=5)
+
+    user_messages = [
+        m["content"] for m in ctx.metadata["messages"] if m.get("role") == "user"
+    ]
+    nudges = user_messages[1:]
+    # First truncation gets standard TRUNCATED_RESPONSE_MESSAGE
+    assert TRUNCATED_RESPONSE_MESSAGE in nudges[0]
+    assert "append=true" not in nudges[0]
+
+    # Second consecutive truncation on same target gets enhanced advice
+    assert len(nudges) >= 2
+    assert TRUNCATED_RESPONSE_MESSAGE in nudges[1]
+    assert "append=true" in nudges[1]
+    assert "/app/huge.py" in nudges[1]
+
