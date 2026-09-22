@@ -613,6 +613,11 @@ class StructuredToolAgent(BaseAgent):
         # agent merely struggles with an UNRELATED target Y (observed:
         # sqlite C9NYKyU, EX92BKr).
         stuck_nudged: set[str] = set()
+        # §v0.5.3 write_file append guardrail: track which paths have been
+        # written/initialized in this session with append=false (or default).
+        # Any write_file with append=true to an uninitialized path executes,
+        # but receives an advisory warning note in the receipt.
+        write_file_initialized_paths: set[str] = set()
 
         # §2.1 (tightened, v0.4 spec) — same completion-evidence gate as
         # BaselineAgent: one nudge on the first task_complete while
@@ -798,13 +803,37 @@ class StructuredToolAgent(BaseAgent):
             elif name == "write_file":
                 append_val = args.get("append", False)
                 append_flag = append_val is True or str(append_val).lower() in ("true", "1")
+                target_path = args.get("path", "")
+                is_initialized = (
+                    target_path in write_file_initialized_paths
+                    or (bool(target_path) and os.path.normpath(target_path) in write_file_initialized_paths)
+                )
                 receipt = await structured_write_file(
                     environment,
-                    args.get("path", ""),
+                    target_path,
                     args.get("content", ""),
                     timeout_sec=COMMAND_TIMEOUT_SEC,
                     append=append_flag,
                 )
+                if receipt.exit_code == 0:
+                    if target_path:
+                        write_file_initialized_paths.add(target_path)
+                        write_file_initialized_paths.add(os.path.normpath(target_path))
+
+                if append_flag and not is_initialized and receipt.exit_code == 0:
+                    receipt.warning = (
+                        f"Note: '{target_path}' was not created by you with append=false in this "
+                        "session (it may have pre-existed on disk). Content was appended to its "
+                        "existing content, not overwritten. If you intended to start a NEW file, "
+                        "call write_file with append=false first."
+                    )
+                    self.logger.warning(
+                        "turn %d: write_file called with append=True for uninitialized path %r; "
+                        "injected advisory warning into tool receipt",
+                        turns,
+                        target_path,
+                    )
+
                 has_edited = True
                 pending_verification = True
                 completion_evidence_nudged = False

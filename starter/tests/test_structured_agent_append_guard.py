@@ -269,3 +269,90 @@ def test_initialized_path_omitted_append_param_then_append_true_receives_no_warn
     second_tool_data = json.loads(tool_msgs[1]["content"])
     assert "was not created by you with append=false" not in tool_msgs[1]["content"]
     assert second_tool_data.get("warning") is None
+
+
+def test_real_environment_uninitialized_append_true_actually_writes_and_warns(tmp_path, monkeypatch):
+    """End-to-end integration with real bash execution:
+    1. Pre-existing file exists on disk.
+    2. Agent issues append=True.
+    3. Content is actually appended on disk (file exists and contains both).
+    4. Warning is returned in tool result.
+    5. Agent issues second append=True.
+    6. Content is appended again.
+    7. No warning in second tool result.
+    """
+    import os
+    import subprocess
+    from types import SimpleNamespace
+
+    class RealEnvironment:
+        async def exec(self, command: str, timeout_sec: int):
+            result = subprocess.run(
+                ["/bin/sh", "-c", command],
+                env={"PATH": os.environ.get("PATH", "/bin:/usr/bin")},
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+            return SimpleNamespace(
+                stdout=result.stdout, stderr=result.stderr, return_code=result.returncode
+            )
+
+    target_file = tmp_path / "data.txt"
+    target_file.write_text("existing line\n")
+
+    turns = [
+        (
+            "",
+            [
+                {
+                    "id": "c1",
+                    "name": "write_file",
+                    "arguments": {"path": str(target_file), "content": "added line 1\n", "append": True},
+                }
+            ],
+            {"prompt_tokens": 1, "completion_tokens": 1},
+        ),
+        (
+            "",
+            [
+                {
+                    "id": "c2",
+                    "name": "write_file",
+                    "arguments": {"path": str(target_file), "content": "added line 2\n", "append": True},
+                }
+            ],
+            {"prompt_tokens": 1, "completion_tokens": 1},
+        ),
+        (
+            "",
+            [
+                {
+                    "id": "c3",
+                    "name": "task_complete",
+                    "arguments": {"evidence": "done"},
+                }
+            ],
+            {"prompt_tokens": 1, "completion_tokens": 1},
+        ),
+    ]
+
+    ctx = run_structured_agent(monkeypatch, RealEnvironment(), turns)
+
+    # Verify disk content has all three parts
+    assert target_file.read_text() == "existing line\nadded line 1\nadded line 2\n"
+
+    tool_msgs = [m for m in ctx.metadata["messages"] if m.get("role") == "tool"]
+    assert len(tool_msgs) >= 2
+
+    first_tool_data = json.loads(tool_msgs[0]["content"])
+    second_tool_data = json.loads(tool_msgs[1]["content"])
+
+    # First tool message has warning
+    assert "warning" in first_tool_data
+    assert "was not created by you with append=false" in first_tool_data["warning"]
+
+    # Second tool message has NO warning
+    assert second_tool_data.get("warning") is None
+    assert "was not created by you with append=false" not in tool_msgs[1]["content"]
+

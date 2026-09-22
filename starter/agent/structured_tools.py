@@ -155,9 +155,18 @@ class ExecutionReceipt:
     content_sha256: str | None = None
     content_bytes: int | None = None
     error: str | None = None
+    warning: str | None = None
+
+    @property
+    def note(self) -> str | None:
+        return self.warning
+
+    @note.setter
+    def note(self, val: str | None) -> None:
+        self.warning = val
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "tool": self.tool,
             "exit_code": self.exit_code,
             "timed_out": self.timed_out,
@@ -170,6 +179,9 @@ class ExecutionReceipt:
             "content_bytes": self.content_bytes,
             "error": self.error,
         }
+        if self.warning is not None:
+            d["warning"] = self.warning
+        return d
 
 
 def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
