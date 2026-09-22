@@ -77,6 +77,7 @@ Environment variables
 from collections import deque
 import json
 import os
+import re
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -612,6 +613,11 @@ class StructuredToolAgent(BaseAgent):
         # agent merely struggles with an UNRELATED target Y (observed:
         # sqlite C9NYKyU, EX92BKr).
         stuck_nudged: set[str] = set()
+        # §v0.5.3 write_file append guardrail: track which paths have been
+        # written/initialized in this session with append=false (or default).
+        # Any write_file with append=true to an uninitialized path executes,
+        # but receives an advisory warning note in the receipt.
+        write_file_initialized_paths: set[str] = set()
 
         # §2.1 (tightened, v0.4 spec) — same completion-evidence gate as
         # BaselineAgent: one nudge on the first task_complete while
@@ -627,6 +633,9 @@ class StructuredToolAgent(BaseAgent):
         # action_since_nudge=True but meaningful_action_since_nudge=False,
         # and must still be rejected hard.
         meaningful_action_since_nudge = False
+
+        last_truncated_target: str | None = None
+        consecutive_truncated_target_count: int = 0
 
         for _ in range(MAX_TURNS):
             turns += 1
@@ -679,11 +688,30 @@ class StructuredToolAgent(BaseAgent):
                     text,
                 )
                 if usage.get("finish_reason") == "length":
+                    target_match = re.search(r'["\']path["\']\s*:\s*["\']([^"\']+)["\']', text)
+                    current_target = target_match.group(1) if target_match else None
+                    if current_target and current_target == last_truncated_target:
+                        consecutive_truncated_target_count += 1
+                    else:
+                        consecutive_truncated_target_count = 1 if current_target else 0
+                        last_truncated_target = current_target
+
                     nudge_content = TRUNCATED_RESPONSE_MESSAGE
+                    if consecutive_truncated_target_count >= 2 and current_target:
+                        nudge_content += (
+                            f"\nNote: Writing to '{current_target}' appears too large for a single call "
+                            "and was repeatedly cut off. Split the file into smaller chunks: "
+                            "write the first chunk with append=false, then append subsequent chunks using append=true."
+                        )
                 else:
+                    last_truncated_target = None
+                    consecutive_truncated_target_count = 0
                     nudge_content = STRUCTURED_NUDGE_MESSAGE
                 messages.append({"role": "user", "content": nudge_content})
                 continue
+
+            last_truncated_target = None
+            consecutive_truncated_target_count = 0
 
             # Exactly one tool call per turn by prompt contract; if the
             # model sends more, only the first is executed and the rest
@@ -773,12 +801,39 @@ class StructuredToolAgent(BaseAgent):
                     pending_verification = False
                     had_successful_test_after_edit = True
             elif name == "write_file":
+                append_val = args.get("append", False)
+                append_flag = append_val is True or str(append_val).lower() in ("true", "1")
+                target_path = args.get("path", "")
+                is_initialized = (
+                    target_path in write_file_initialized_paths
+                    or (bool(target_path) and os.path.normpath(target_path) in write_file_initialized_paths)
+                )
                 receipt = await structured_write_file(
                     environment,
-                    args.get("path", ""),
+                    target_path,
                     args.get("content", ""),
                     timeout_sec=COMMAND_TIMEOUT_SEC,
+                    append=append_flag,
                 )
+                if receipt.exit_code == 0:
+                    if target_path:
+                        write_file_initialized_paths.add(target_path)
+                        write_file_initialized_paths.add(os.path.normpath(target_path))
+
+                if append_flag and not is_initialized and receipt.exit_code == 0:
+                    receipt.warning = (
+                        f"Note: '{target_path}' was not created by you with append=false in this "
+                        "session (it may have pre-existed on disk). Content was appended to its "
+                        "existing content, not overwritten. If you intended to start a NEW file, "
+                        "call write_file with append=false first."
+                    )
+                    self.logger.warning(
+                        "turn %d: write_file called with append=True for uninitialized path %r; "
+                        "injected advisory warning into tool receipt",
+                        turns,
+                        target_path,
+                    )
+
                 has_edited = True
                 pending_verification = True
                 completion_evidence_nudged = False

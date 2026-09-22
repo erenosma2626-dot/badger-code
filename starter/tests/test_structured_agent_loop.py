@@ -118,3 +118,51 @@ def test_structured_agent_logs_raw_content_when_no_tool_call_is_recognized(
         and "finish_reason=length" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_structured_agent_dispatches_write_file_with_append_true(monkeypatch):
+    import agent.agent as agent_module
+
+    captured_kwargs = {}
+
+    async def fake_structured_write_file(environment, path, content, timeout_sec, append=False):
+        captured_kwargs["path"] = path
+        captured_kwargs["content"] = content
+        captured_kwargs["append"] = append
+        from agent.structured_tools import ExecutionReceipt
+        return ExecutionReceipt(
+            tool="write_file",
+            exit_code=0,
+            content_sha256="fakehash",
+            content_bytes=len(content),
+            changed_paths=[path],
+        )
+
+    monkeypatch.setattr(agent_module, "structured_write_file", fake_structured_write_file)
+
+    class ScriptedLLM:
+        def __init__(self, model_name=None):
+            self.calls = 0
+
+        async def chat_tools(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    "",
+                    [{"id": "c1", "name": "write_file", "arguments": {"path": "/app/test.txt", "content": "more data", "append": True}}],
+                    {"prompt_tokens": 5, "completion_tokens": 2},
+                )
+            return (
+                "",
+                [{"id": "c2", "name": "task_complete", "arguments": {"evidence": "appended"}}],
+                {"prompt_tokens": 5, "completion_tokens": 2},
+            )
+
+    monkeypatch.setattr(agent_module, "LLMClient", ScriptedLLM)
+
+    sut = StructuredToolAgent(logs_dir=pathlib.Path("/tmp"), model_name="fake-model")
+    ctx = FakeContext()
+    asyncio.run(sut.run("do the thing", FakeEnvironment(), ctx))
+
+    assert captured_kwargs.get("append") is True
+

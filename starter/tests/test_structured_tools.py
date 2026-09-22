@@ -369,4 +369,62 @@ def test_read_file_direct_subprocess_python3_command_no_syntax_error(tmp_path):
     assert "Is a directory" in proc_dir.stderr
 
 
+def test_write_file_schema_declares_append_param():
+    by_name = {t["function"]["name"]: t["function"] for t in TOOL_SCHEMAS}
+    write_schema = by_name["write_file"]
+    props = write_schema["parameters"]["properties"]
+    assert "append" in props, "write_file schema must declare 'append' parameter"
+    assert props["append"]["type"] == "boolean"
+    assert "append" in props["append"]["description"].lower()
+    assert "append" not in write_schema["parameters"]["required"], "'append' must be optional"
+    assert set(write_schema["parameters"]["required"]) == {"path", "content"}
 
+
+def test_write_file_append_false_overwrites_content(tmp_path):
+    target = tmp_path / "test.txt"
+    target.write_text("initial content\n")
+    # Real environment with python3
+    import os
+    env = _RealBashInMinimalPathEnvironment(os.environ.get("PATH", "/bin:/usr/bin"))
+    receipt = asyncio.run(
+        write_file(env, str(target), "overwritten content\n", timeout_sec=10, append=False)
+    )
+    assert receipt.exit_code == 0
+    assert target.read_text() == "overwritten content\n"
+
+
+def test_write_file_append_true_appends_to_existing_file_python3(tmp_path):
+    target = tmp_path / "test_py3.txt"
+    target.write_text("initial line\n")
+    import os
+    env = _RealBashInMinimalPathEnvironment(os.environ.get("PATH", "/bin:/usr/bin"))
+    receipt = asyncio.run(
+        write_file(env, str(target), "appended line\n", timeout_sec=10, append=True)
+    )
+    assert receipt.exit_code == 0
+    assert target.read_text() == "initial line\nappended line\n"
+
+
+def test_write_file_append_true_appends_to_existing_file_base64(tmp_path):
+    path = _minimal_path_with_only(tmp_path, ["sh", "base64", "mkdir", "dirname", "printf"])
+    env = _RealBashInMinimalPathEnvironment(path)
+    target = tmp_path / "out" / "appended_b64.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("first chunk\n")
+
+    receipt = asyncio.run(
+        write_file(env, str(target), "second chunk\n", timeout_sec=10, append=True)
+    )
+    assert receipt.exit_code == 0
+    assert target.read_text() == "first chunk\nsecond chunk\n"
+
+
+def test_write_file_append_true_creates_new_file_if_absent(tmp_path):
+    target = tmp_path / "new_dir" / "new_file.txt"
+    import os
+    env = _RealBashInMinimalPathEnvironment(os.environ.get("PATH", "/bin:/usr/bin"))
+    receipt = asyncio.run(
+        write_file(env, str(target), "fresh content\n", timeout_sec=10, append=True)
+    )
+    assert receipt.exit_code == 0
+    assert target.read_text() == "fresh content\n"

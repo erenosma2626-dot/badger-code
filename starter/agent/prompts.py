@@ -156,7 +156,13 @@ active `python3` interpreter (confirm with `which python3`, which may point to a
 alternative installation like `/usr/local/bin/python3` or a virtual environment). To ensure \
 a package or module is available to the active interpreter, prefer installing directly into it \
 with `python3 -m pip install <package>` rather than relying on system package managers.
-12. When the task is fully complete, respond with exactly the following, \
+12. If a file content you need to produce is large (approaching thousands of characters or tokens), \
+do NOT attempt to write it all in a single write_file call — this risks your response getting \
+cut off by the token limit (finish_reason=length), causing the tool call or action to be completely \
+lost or invalid. Instead, split the file into logical chunks: write the first chunk with \
+append=false (or default without the parameter) to initialize the file, and append subsequent \
+chunks to the end of the file using append=true.
+13. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -274,7 +280,13 @@ installs into the system Python directories, which may NOT be in the module sear
 path of the currently active `python3` interpreter (confirm with `which python3`, \
 which may point to an alternative installation like `/usr/local/bin/python3` or a \
 virtual environment). To ensure packages are available to the active interpreter, \
-prefer installing directly into it with `python3 -m pip install <package>`.
+prefer installing directly into it with `python3 -m pip install <package>`. \
+If a file content you need to produce is large (approaching thousands of characters or \
+tokens), do NOT attempt to write it all in a single write_file call — this risks your response \
+getting cut off by the token limit (finish_reason=length), causing the tool call to be \
+completely lost or invalid. Instead, split the file into logical chunks: write the first \
+chunk with append=false (or default without the parameter) to initialize the file, and \
+append subsequent chunks to the end of the file using append=true.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
