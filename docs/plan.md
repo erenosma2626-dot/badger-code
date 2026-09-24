@@ -1,5 +1,11 @@
 # Badger Code — Canlı Plan
 
+> **Çalışma düzeni değişti (2026-09-24):** CAO bırakıldı, orkestrasyon AionUi'de.
+> Aşağıdaki kayıtlardaki `worker1-agy`, `worker-claude-dev`, `worker3-*`,
+> `supervisor` isimleri eski CAO düzenine ait. Yeni karşılıkları: agy → Uygulayıcı
+> (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
+> Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
+
 ## 🔵 2026-09-24 — v0.6 HAZIRLIĞI BAŞLADI (Faz B = ilk 89-görev tam koşu) — YENİ SOHBET BURADAN OKUMALI
 
 **Kullanıcı kararı:** v0.5.3 + geçmiş nokta atışından (docs/worker-claude-dev-v06-prep-guardrail-review.md, docs/worker1-agy-v06-history-spotcheck.md) çıkan 5 genel değişiklik v0.6'ya giriyor: (1) cyclic-loop dedektörü ilerleme-farkında (3 kesin FP kanıtlı), (2) ardışık araçsız length-kesilme tavanı, (3) llm.py transient retry/backoff, (4) `pip install .` prompt notu, (5) systemd yok/`/etc/hosts` ezme ortam ipuçları. worker-claude-dev `v0.6-prep` branch'inde TDD ile uyguluyor; review ayrı claude-dev ile. Sonra v0.6 = Faz B tam koşu (k=1) — amaç BAZ İSTATİSTİK; başlatmadan önce maliyet tahmini + kullanıcı onayı.
