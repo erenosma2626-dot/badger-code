@@ -206,3 +206,57 @@ def test_two_full_cycles_through_four_targets_with_write_file_triggers_cyclic_lo
 
 # must still pass — covered by test_structured_agent_stuck_loop.py, run
 # together with this file as part of the full suite.
+
+
+# --- v0.6 madde 1: progress-aware cyclic detection -------------------------
+
+def test_rotated_cycle_after_nudge_terminates_on_next_lap_step(monkeypatch):
+    """Rotation of the same cycle (b,c,d,a vs a,b,c,d) is the SAME cycle:
+    after the nudge at turn 8, the very next repeat (turn 9) terminates."""
+    files = ["a.py", "b.py", "c.py", "d.py"] * 3
+    results = [FakeExecResult("looked, nothing changed\n", "", 0) for _ in files]
+    env = FakeEnvironment(results)
+    turns = [_exec_call(i, f) for i, f in enumerate(files)]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=15)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+    assert ctx.metadata["turns"] == 9
+
+
+def test_edit_test_progress_loop_is_not_cut(monkeypatch):
+    """hMsRghV-type: write_file(app.py) -> run tests, repeated with new
+    content and new (successful) output each lap. Must not be terminated."""
+    turns = []
+    results = []
+    for i in range(6):
+        turns.append(_write_call(i, "app.py", content=f"v{i}"))
+        turns.append(("", [{"id": f"t{i}", "name": "terminal_exec",
+                            "arguments": {"command": "python3 test_app.py"}}]))
+        results.append(FakeExecResult(f"{i + 1} tests passed\n", "", 0))
+    turns.append(("", [{"id": "done", "name": "task_complete", "arguments": {"evidence": "ok"}}]))
+    env = FakeEnvironment(results)
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=20)
+
+    assert ctx.metadata["termination_reason"] == "task_complete"
+
+
+def test_exact_repeat_still_caught(monkeypatch):
+    turns = [("", [{"id": f"r{i}", "name": "terminal_exec",
+                    "arguments": {"command": "ls /nope"}}]) for i in range(10)]
+    env = FakeEnvironment([FakeExecResult("", "No such file", 2)])
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=10)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
+
+
+def test_target_stuck_still_caught(monkeypatch):
+    files = ["x.py"] * 8
+    env = FakeEnvironment([FakeExecResult("", "", 1) for _ in files])
+    turns = [_exec_call(i, f) for i, f in enumerate(files)]
+
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=10)
+
+    assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
