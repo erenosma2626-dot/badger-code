@@ -71,3 +71,43 @@ def test_find_cyclic_multi_target_loop_honors_explicit_max_window():
     # With max_window=44, 20 entries is detected
     assert find_cyclic_multi_target_loop(history, max_window=44) == targets
 
+
+
+# --- v0.6 madde 1: progress-aware cyclic detection -------------------------
+
+from agent.tools import canonical_cycle, extract_target, should_defer_cyclic_terminate
+
+
+def test_canonical_cycle_is_rotation_independent():
+    assert canonical_cycle(["c", "d", "a", "b"]) == ["a", "b", "c", "d"]
+    assert canonical_cycle(["b", "c", "d", "a"]) == canonical_cycle(["a", "b", "c", "d"])
+
+
+def test_identical_evidence_across_laps_is_still_cyclic():
+    history = ["a.py", "b.py", "a.py", "b.py"]
+    evidence = [("read_file", 1, "h1"), ("read_file", 1, "h2")] * 2
+    assert find_cyclic_multi_target_loop(history, evidence=evidence) == ["a.py", "b.py"]
+
+
+def test_changing_evidence_across_laps_is_progress_not_cyclic():
+    """hMsRghV-style edit->test loop: same two targets, but the written
+    content and the test output change every lap."""
+    history = ["app.py", "test_app.py", "app.py", "test_app.py"]
+    evidence = [
+        ("write_file", 0, "sha1"), ("terminal_exec", 1, "out1"),
+        ("write_file", 0, "sha2"), ("terminal_exec", 1, "out2"),
+    ]
+    assert find_cyclic_multi_target_loop(history, evidence=evidence) is None
+
+
+def test_defer_cyclic_terminate_only_on_exit0_with_new_output():
+    assert should_defer_cyclic_terminate(0, "new", {"old"}) is True
+    assert should_defer_cyclic_terminate(0, "old", {"old"}) is False
+    assert should_defer_cyclic_terminate(1, "new", {"old"}) is False
+
+
+def test_extract_target_ignores_ip_inside_python_c():
+    cmd = "python3 -c \"import socket; s=socket.socket(); s.connect(('10.0.0.5', 80))\""
+    assert extract_target(cmd) is None
+    assert extract_target("curl http://127.0.0.1:5000/") != "127.0.0.1"
+    assert extract_target("python3 -c 'print(1)' src/app.py") == "src/app.py"

@@ -330,3 +330,13 @@ def observation_message(observation: str) -> str:
         last action, followed by a prompt for the next action.
     """
     return f"Result:\n{observation}\n\nWhat is your next action?"
+
+
+REPETITIVE_TRUNCATION_MESSAGE = (
+    "Your last responses were cut off repeatedly and contain repeated lines. "
+    "Write a short, minimal version instead: do not produce repeated or "
+    "boilerplate lines, generate repetitive content with a loop/script "
+    "rather than spelling it out, and call exactly one tool."
+)
+"""v0.6 madde 2 — added to the truncation nudge on the 2nd+ consecutive
+tool-less length truncation when the raw text repeats lines."""

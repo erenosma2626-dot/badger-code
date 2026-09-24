@@ -501,8 +501,19 @@ def extract_target(command_or_path: str) -> str | None:
     the final argument). Returns ``None`` if nothing path-like is found —
     e.g. a bare `ls` or `pwd` has no single target to track.
     """
-    matches = _TARGET_PATH_RE.findall(command_or_path)
+    # v0.6: inline interpreter code (`python -c "..."`, `bash -c '...'`)
+    # is program text, not a path argument — an IP or `mod.attr` inside it
+    # was being mistaken for the target.
+    stripped = _INLINE_CODE_RE.sub(" ", command_or_path)
+    matches = [
+        m for m in _TARGET_PATH_RE.findall(stripped)
+        if not _IP_LIKE_RE.search(m)
+    ]
     return matches[-1] if matches else None
+
+
+_INLINE_CODE_RE = re.compile(r"""\s-c\s+(?:"(?:[^"\\]|\\.)*"|'[^']*')""")
+_IP_LIKE_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
 _SEARCH_READ_COMMANDS = {
@@ -568,8 +579,26 @@ def is_unproductive_attempt(
     return any(kw in lowered for kw in _UNPRODUCTIVE_KEYWORDS)
 
 
+def canonical_cycle(cycle: list[str]) -> list[str]:
+    """v0.6 — rotation-independent form of a cycle (the lexicographically
+    smallest rotation), so ``b,c,d,a`` and ``a,b,c,d`` share one
+    stuck_nudged key instead of each earning a fresh nudge."""
+    if not cycle:
+        return cycle
+    return min(cycle[i:] + cycle[:i] for i in range(len(cycle)))
+
+
+def should_defer_cyclic_terminate(
+    exit_code: int | None, out_hash: str, seen_hashes: set[str]
+) -> bool:
+    """v0.6 — a cyclic hard-terminate is postponed when the latest action
+    succeeded (exit 0) and produced output never seen before: that is
+    evidence of progress, not a loop."""
+    return exit_code == 0 and out_hash not in seen_hashes
+
+
 def find_cyclic_multi_target_loop(
-    history: list[str], max_window: int = 44
+    history: list[str], max_window: int = 44, evidence: list | None = None
 ) -> list[str] | None:
     """v0.4.1 madde 1 (calibrated in v0.4.1.2) — detect an agent cycling
     between N>=2 distinct targets (A->B->C->D->A->B->C->D->...) without
@@ -589,6 +618,12 @@ def find_cyclic_multi_target_loop(
     (a single repeated target is ``target_is_stuck``'s job, not this
     function's).
 
+    v0.6: if ``evidence`` (a list parallel to ``history`` of
+    ``(tool, exit_code, output_hash)`` tuples) is given, the two laps must
+    also have identical evidence — if the tool/exit code/output changed
+    between laps (e.g. edit -> test with new content and new test output),
+    that is progress and is not reported as a cycle.
+
     Returns the repeating cycle (e.g. ``["a.py", "b.py", "c.py", "d.py"]``)
     if found, else ``None``.
     """
@@ -601,6 +636,10 @@ def find_cyclic_multi_target_loop(
         first_half = recent[:cycle_len]
         second_half = recent[cycle_len:]
         if first_half == second_half and len(set(first_half)) >= 2:
+            if evidence is not None and len(evidence) >= span:
+                recent_ev = evidence[-span:]
+                if recent_ev[:cycle_len] != recent_ev[cycle_len:]:
+                    continue
             return first_half
     return None
 

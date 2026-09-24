@@ -116,3 +116,39 @@ def test_repeated_length_truncation_on_same_write_file_target_gets_append_advice
     assert "append=true" in nudges[1]
     assert "/app/huge.py" in nudges[1]
 
+
+
+# --- v0.6 madde 2: consecutive tool-less length cap -----------------------
+
+_LEN = {"prompt_tokens": 1, "completion_tokens": 1, "finish_reason": "length"}
+
+
+def _user_msgs(ctx):
+    return [m["content"] for m in ctx.metadata["messages"] if m["role"] == "user"]
+
+
+def test_two_consecutive_length_with_repeated_lines_gets_minimal_nudge(monkeypatch):
+    repetitive = "\n".join(["x = compute(1)"] * 30)
+    turns = [(repetitive, [], _LEN), (repetitive, [], _LEN),
+             ("", [{"id": "d", "name": "task_complete", "arguments": {"evidence": "ok"}}], {})]
+    ctx = run_structured_agent(monkeypatch, FakeEnvironment(), turns, max_turns=5)
+    msgs = _user_msgs(ctx)
+    assert "repeated lines" in msgs[-1].lower() or "repeat" in msgs[-1].lower()
+    assert "minimal" in msgs[-1].lower()
+
+
+def test_four_consecutive_length_terminates_early(monkeypatch):
+    turns = [(f"blob {i} " * 50, [], _LEN) for i in range(10)]
+    ctx = run_structured_agent(monkeypatch, FakeEnvironment(), turns, max_turns=10)
+    assert ctx.metadata["termination_reason"] == "consecutive_length_truncation"
+    assert ctx.metadata["turns"] == 4
+
+
+def test_length_counter_resets_after_a_tool_call(monkeypatch):
+    call = ("", [{"id": "e", "name": "terminal_exec", "arguments": {"command": "echo hi"}}], {})
+    turns = [("a", [], _LEN), ("b", [], _LEN), ("c", [], _LEN), call,
+             ("d", [], _LEN), ("e", [], _LEN), ("f", [], _LEN),
+             ("", [{"id": "d", "name": "task_complete", "arguments": {"evidence": "ok"}}], {})]
+    env = FakeEnvironment()
+    ctx = run_structured_agent(monkeypatch, env, turns, max_turns=10)
+    assert ctx.metadata["termination_reason"] == "task_complete"
