@@ -73,8 +73,7 @@ def _create_mock_client():
     return client
 
 
-@pytest.mark.asyncio
-async def test_chat_retries_transient_error_and_eventually_succeeds(monkeypatch):
+def test_chat_retries_transient_error_and_eventually_succeeds(monkeypatch):
     client = _create_mock_client()
     req = _dummy_request()
 
@@ -97,7 +96,7 @@ async def test_chat_retries_transient_error_and_eventually_succeeds(monkeypatch)
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
-    text, usage = await client.chat([{"role": "user", "content": "hi"}])
+    text, usage = asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
 
     assert text == "Hello after retry"
     assert client._client.chat.completions.create.call_count == 3
@@ -107,8 +106,7 @@ async def test_chat_retries_transient_error_and_eventually_succeeds(monkeypatch)
     assert 4.0 <= sleep_calls[1] <= 4.5
 
 
-@pytest.mark.asyncio
-async def test_chat_exhausts_retries_and_raises(monkeypatch):
+def test_chat_exhausts_retries_and_raises(monkeypatch):
     client = _create_mock_client()
     error_503 = _status_error(503)
 
@@ -122,7 +120,7 @@ async def test_chat_exhausts_retries_and_raises(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     with pytest.raises(openai.APIStatusError) as exc_info:
-        await client.chat([{"role": "user", "content": "hi"}])
+        asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
 
     assert exc_info.value.status_code == 503
     # 1 initial call + 3 retries = 4 total calls
@@ -135,8 +133,7 @@ async def test_chat_exhausts_retries_and_raises(monkeypatch):
     assert sum(sleep_calls) < 30.0
 
 
-@pytest.mark.asyncio
-async def test_chat_does_not_retry_4xx_errors(monkeypatch):
+def test_chat_does_not_retry_4xx_errors(monkeypatch):
     client = _create_mock_client()
     client._client.chat.completions.create.side_effect = _status_error(401)
 
@@ -144,15 +141,14 @@ async def test_chat_does_not_retry_4xx_errors(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
     with pytest.raises(openai.AuthenticationError):
-        await client.chat([{"role": "user", "content": "hi"}])
+        asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
 
     # No retries on 401 client error
     assert client._client.chat.completions.create.call_count == 1
     sleep_mock.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_chat_tools_retries_transient_error(monkeypatch):
+def test_chat_tools_retries_transient_error(monkeypatch):
     client = _create_mock_client()
     req = _dummy_request()
 
@@ -182,10 +178,10 @@ async def test_chat_tools_retries_transient_error(monkeypatch):
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
-    text, tool_calls, usage = await client.chat_tools(
+    text, tool_calls, usage = asyncio.run(client.chat_tools(
         [{"role": "user", "content": "hi"}],
         tools=[{"type": "function", "function": {"name": "terminal_exec"}}],
-    )
+    ))
 
     assert tool_calls == [
         {"id": "call_abc", "name": "terminal_exec", "arguments": {"command": "pwd"}}
