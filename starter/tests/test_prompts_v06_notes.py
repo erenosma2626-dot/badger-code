@@ -20,6 +20,24 @@ def test_structured_system_prompt_advises_on_source_build_install():
     assert "pip install ." in lowered or "pip install -e ." in lowered
 
 
+def test_baseline_system_prompt_advises_on_service_management_and_hosts():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "systemd" in lowered or "systemctl" in lowered
+    assert "service" in lowered or "daemon" in lowered
+    assert "/etc/hosts" in lowered
+    assert "append" in lowered
+    assert "overwrite" in lowered
+
+
+def test_structured_system_prompt_advises_on_service_management_and_hosts():
+    lowered = STRUCTURED_SYSTEM_PROMPT.lower()
+    assert "systemd" in lowered or "systemctl" in lowered
+    assert "service" in lowered or "daemon" in lowered
+    assert "/etc/hosts" in lowered
+    assert "append" in lowered
+    assert "overwrite" in lowered
+
+
 def test_prompts_remain_generic_and_avoid_task_names():
     for prompt in (SYSTEM_PROMPT, STRUCTURED_SYSTEM_PROMPT):
         lowered = prompt.lower()

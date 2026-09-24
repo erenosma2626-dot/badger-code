@@ -165,7 +165,11 @@ chunks to the end of the file using append=true.
 13. When compiling or building a Python package from source, install it into the active \
 environment using `pip install .` (or `pip install -e .`) unless the task explicitly \
 specifies an in-place build; do not leave it at `build_ext --inplace`.
-14. When the task is fully complete, respond with exactly the following, \
+14. When managing background services, if systemd or systemctl is unavailable in the container, \
+use `service <name> start` or start the daemon process directly in the background. \
+Never overwrite `/etc/hosts` (overwriting or truncating it can break container DNS and networking); \
+if custom host entries are required, always append lines to `/etc/hosts`.
+15. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -292,7 +296,10 @@ chunk with append=false (or default without the parameter) to initialize the fil
 append subsequent chunks to the end of the file using append=true. \
 When compiling or building a Python package from source, install it into the active \
 environment using `pip install .` (or `pip install -e .`) unless the task explicitly \
-specifies an in-place build; do not leave it at `build_ext --inplace`.
+specifies an in-place build; do not leave it at `build_ext --inplace`. \
+When managing background services, if systemd or systemctl is unavailable in the container, \
+use `service <name> start` or start the daemon process directly. \
+Never overwrite `/etc/hosts`; if custom host entries are required, always append lines to `/etc/hosts`.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
