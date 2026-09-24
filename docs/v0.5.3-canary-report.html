@@ -1,0 +1,258 @@
+<title>Badger v0.5.3 Canary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --bg:#F3F5F4; --surface:#FFFFFF; --ink:#18211F; --muted:#56625F; --line:#D5DCDA;
+  --accent:#1F6F78; --accent-soft:#DDEDEE;
+  --pass:#1E7A46; --pass-bg:#DDF1E4;
+  --fail:#B33A2E; --fail-bg:#F7DEDA;
+  --tout:#9A5B00; --tout-bg:#F8EACB;
+  --infra:#5E6A70; --infra-bg:#E4E8EA;
+  --none:#A9B3B1;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#111716; --surface:#18201F; --ink:#E6ECEA; --muted:#98A6A2; --line:#2C3836;
+    --accent:#5FB7C0; --accent-soft:#1C3336;
+    --pass:#6BCB90; --pass-bg:#173123; --fail:#F08A7E; --fail-bg:#3A1D1A;
+    --tout:#E6B45C; --tout-bg:#372A12; --infra:#AAB6BB; --infra-bg:#26302F; --none:#4B5856;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#111716; --surface:#18201F; --ink:#E6ECEA; --muted:#98A6A2; --line:#2C3836;
+  --accent:#5FB7C0; --accent-soft:#1C3336;
+  --pass:#6BCB90; --pass-bg:#173123; --fail:#F08A7E; --fail-bg:#3A1D1A;
+  --tout:#E6B45C; --tout-bg:#372A12; --infra:#AAB6BB; --infra-bg:#26302F; --none:#4B5856;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;line-height:1.6;padding:40px 20px 72px}
+.wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:48px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:24px;font-weight:600}
+h3{font-size:18px;font-weight:600}
+p{margin:0;max-width:68ch}
+code,.mono{font-family:var(--mono);font-size:.88em}
+code{background:var(--accent-soft);padding:1px 5px;border-radius:3px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.muted{color:var(--muted)}
+section{display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-direction:column;gap:14px;border-bottom:2px solid var(--ink);padding-bottom:24px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.stat{background:var(--surface);padding:16px 18px;display:flex;flex-direction:column;gap:4px}
+.stat .n{font-family:var(--display);font-size:32px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1}
+.stat .l{font-size:13px;color:var(--muted);line-height:1.4}
+
+.scroll{overflow-x:auto;border:1px solid var(--line);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500;background:var(--bg)}
+tr:last-child td{border-bottom:0}
+td.task{font-family:var(--mono);font-size:13px;white-space:nowrap}
+.matrix td{text-align:center}
+.matrix td.task{text-align:left}
+.cell{display:inline-block;min-width:44px;padding:3px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;font-weight:500}
+.P{background:var(--pass-bg);color:var(--pass)}
+.F{background:var(--fail-bg);color:var(--fail)}
+.T{background:var(--tout-bg);color:var(--tout)}
+.I{background:var(--infra-bg);color:var(--infra)}
+.N{color:var(--none)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--muted);align-items:center}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+.tally{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.findings{display:flex;flex-direction:column;gap:14px}
+.finding{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--sev);padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.finding .top{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;justify-content:space-between}
+.pill{font-family:var(--mono);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;padding:2px 8px;border-radius:999px;background:var(--sevbg);color:var(--sev);white-space:nowrap}
+.s-good{--sev:var(--pass);--sevbg:var(--pass-bg)}
+.s-bad{--sev:var(--fail);--sevbg:var(--fail-bg)}
+.s-warn{--sev:var(--tout);--sevbg:var(--tout-bg)}
+.s-new{--sev:var(--accent);--sevbg:var(--accent-soft)}
+.finding ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;max-width:72ch}
+.kv{font-size:14px;color:var(--muted)}
+.kv b{color:var(--ink);font-weight:600}
+
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.phase{background:var(--surface);border:1px solid var(--line);padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.phase.now{border-color:var(--accent);box-shadow:inset 0 3px 0 var(--accent)}
+.phase .tag{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.budget{display:flex;flex-direction:column;gap:8px}
+.bar{display:flex;height:22px;border:1px solid var(--line);background:var(--surface)}
+.bar div{height:100%}
+.bar .spent{background:var(--fail);opacity:.75}
+.bar .now{background:var(--accent)}
+.bar .next{background:var(--accent);opacity:.4}
+.bar-l{display:flex;flex-wrap:wrap;gap:6px 20px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+.bar-l i{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:-1px}
+
+.decision{background:var(--accent-soft);border:1px solid var(--accent);padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.decision ol{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px;max-width:74ch}
+.note{font-size:13.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;max-width:80ch}
+@media (max-width:560px){ body{font-size:15px} th,td{padding:8px 9px} .stat .n{font-size:28px} }
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Badger Code · Terminal-Bench 2.1 canary</span>
+  <h1>v0.5.3 Canary Sonuç Raporu</h1>
+  <p class="muted">Bu sürümde <code>write_file</code>'a eklenen <code>append</code> modunun, append-guard'ın ve "cevap kesildi" durumunda devreye giren güçlendirilmiş kurtarma mesajının gerçek etkisini ölçmek için koşulan 6 run'ın özeti. Kaynaklar: <code>jobs/v053-canary-run1…6</code>, <code>docs/worker1-agy-v053-canary-deepanalysis.md</code>, <code>docs/plan.md</code>.</p>
+  <div class="meta">
+    <span>Tarih <b>2026-09-24</b></span>
+    <span>Commit <b>ef1eb28</b> (v0.5.3 merge)</span>
+    <span>Run <b>6</b> · Trial <b>31</b> dizin</span>
+    <span>max_tokens <b>4096</b></span>
+  </div>
+</header>
+
+<section>
+  <h2>Özet</h2>
+  <div class="stats">
+    <div class="stat"><span class="n">3 / 21</span><span class="l">PASS / puanlanan trial (%14,3). Üçü de <code>log-summary-date-ranges</code>.</span></div>
+    <div class="stat"><span class="n">10</span><span class="l">puansız trial (APIConnectionError ×9, CancelledError ×1). 2 trial hiç dizin üretmedi.</span></div>
+    <div class="stat"><span class="n">1 / 6</span><span class="l"><code>append=true</code> yalnızca 1 trial'da kullanıldı, o da hedef görevde değil.</span></div>
+    <div class="stat"><span class="n">8,24 M</span><span class="l">toplam token (8,01 M input + 0,24 M output). Trial başına ortalama ~266 K.</span></div>
+  </div>
+  <p>Kurulan mekanizmanın kendisi doğru çalışıyor: kurtarma mesajı gidiyor, döngü dedektörü erken devreye giriyor. Ama modeller bu yönlendirmeye uymuyor. Tek gerçek kazanım (<code>log-summary-date-ranges</code> 3/6) bu sürümden gelmedi, v0.5.1'deki "toplu script yaz" notundan geldi. Canary şu an iki şeyi söylüyor: <code>build-cython-ext</code>'te ucuz, genel bir prompt notu adayı var. <code>configure-git-webserver</code>'da da henüz kimsenin incelemediği bir gerileme sinyali duruyor.</p>
+</section>
+
+<section>
+  <h2>Trial matrisi</h2>
+  <div class="legend">
+    <span><span class="cell P">PASS</span> reward 1.0</span>
+    <span><span class="cell F">FAIL</span> reward 0.0</span>
+    <span><span class="cell T">T/O</span> AgentTimeoutError, reward 0.0</span>
+    <span><span class="cell I">ALTY</span> altyapı hatası, puansız</span>
+    <span><span class="cell N">·</span> koşulmadı / kayıp</span>
+  </div>
+  <div class="scroll">
+  <table class="matrix">
+    <thead><tr><th>Görev</th><th>run1</th><th>run2</th><th>run3</th><th>run4</th><th>run5</th><th>run6</th><th>Sonuç</th></tr></thead>
+    <tbody>
+      <tr><td class="task">log-summary-date-ranges</td><td><span class="cell F">FAIL</span></td><td><span class="cell P">PASS</span></td><td><span class="cell P">PASS</span></td><td><span class="cell P">PASS</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td class="tally">3/6</td></tr>
+      <tr><td class="task">regex-log</td><td><span class="cell T">T/O</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell T">T/O</span></td><td><span class="cell I">ALTY</span></td><td><span class="cell I">ALTY</span></td><td><span class="cell F">FAIL</span></td><td class="tally">0/4</td></tr>
+      <tr><td class="task">build-cython-ext</td><td><span class="cell I">ALTY</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td class="tally">0/5</td></tr>
+      <tr><td class="task">chess-best-move</td><td><span class="cell I">ALTY</span></td><td><span class="cell I">ALTY</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell F">FAIL</span></td><td><span class="cell I">ALTY</span></td><td><span class="cell F">FAIL</span></td><td class="tally">0/3</td></tr>
+      <tr><td class="task">configure-git-webserver</td><td><span class="cell I">ALTY</span></td><td><span class="cell T">T/O</span></td><td><span class="cell F">FAIL</span></td><td class="N">·</td><td class="N">·</td><td class="N">·</td><td class="tally">0/2</td></tr>
+      <tr><td class="task">sqlite-with-gcov</td><td><span class="cell I">ALTY</span></td><td class="N">·</td><td><span class="cell F">FAIL</span></td><td class="N">·</td><td class="N">·</td><td class="N">·</td><td class="tally">0/1</td></tr>
+      <tr><td class="task">fix-code-vulnerability</td><td><span class="cell I">ALTY</span></td><td class="N">·</td><td><span class="cell I">ALTY</span></td><td class="N">·</td><td class="N">·</td><td class="N">·</td><td class="tally">0/0</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="muted" style="font-size:14px">"Sonuç" sütunu PASS / puanlanan trial sayısıdır. run1–3 7 görevle koştu. Altyapı hataları yüzünden run4–6, v0.5.3'ün hedeflediği 4 göreve daraltıldı. run2'nin <code>sqlite-with-gcov</code> ve <code>fix-code-vulnerability</code> trial'ları hiç sonuç dizini üretmedi. Derin analiz raporu yalnızca ilk 4 görevi (24 trial) kapsıyor. Alttaki 3 satır bu rapor için <code>result.json</code> dosyalarından doğrudan okundu.</p>
+</section>
+
+<section>
+  <h2>Sürümler arası karşılaştırma</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Görev</th><th>v0.5.1 (n=3)</th><th>v0.5.2 (n=3)</th><th>v0.5.3</th><th>Eğilim</th></tr></thead>
+    <tbody>
+      <tr><td class="task">log-summary-date-ranges</td><td class="tally">1/3</td><td class="tally">0/3</td><td class="tally">3/6</td><td>Yükseliyor. v0.5.2'deki 0/3'ün bir kısmı verifier'daki DNS hatasından kaynaklanıyordu.</td></tr>
+      <tr><td class="task">configure-git-webserver</td><td class="tally">1/3</td><td class="tally">2/3</td><td class="tally">0/2</td><td>v0.5'te 3/3'tü. Gürültülü ama düşüşte, aşağıdaki 5. bulguya bakın.</td></tr>
+      <tr><td class="task">sqlite-with-gcov</td><td class="tally">0/2</td><td class="tally">1/3</td><td class="tally">0/1</td><td>Örneklem yetersiz.</td></tr>
+      <tr><td class="task">regex-log</td><td class="tally">0/3</td><td class="tally">0/3</td><td class="tally">0/4</td><td>Değişmedi, hata biçimi değişti.</td></tr>
+      <tr><td class="task">build-cython-ext</td><td class="tally">0/3</td><td class="tally">0/3</td><td class="tally">0/5</td><td>Derleme artık geçiyor, kurulum adımı eksik.</td></tr>
+      <tr><td class="task">chess-best-move</td><td class="tally">0/3</td><td class="tally">0/3</td><td class="tally">0/3</td><td>Model yetkinlik sınırı (Kategori C).</td></tr>
+      <tr><td class="task">fix-code-vulnerability</td><td class="tally">0/3</td><td class="tally">0/3</td><td class="tally">0/0</td><td>Bu turda hiç puanlanmadı.</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>Bulgular</h2>
+  <div class="findings">
+
+    <div class="finding s-good">
+      <div class="top"><h3>1 · log-summary-date-ranges 3/6</h3><span class="pill">Kazanım · v0.5.3 ile ilgisiz</span></div>
+      <p>PASS olan 3 trial'ın hiçbirinde <code>append=true</code> kullanılmadı. Üçünde de model tek bir <code>analyze_logs.py</code> yazdı, çalıştırdı, CSV'yi okuyup doğruladı ve bitirdi (9–11 tur). Başarı v0.5.1'in toplu-script notundan geliyor.</p>
+      <ul>
+        <li>run5 gerçek bir mantık hatasıyla kaldı: <code>if severity in line</code> ifadesi mesaj gövdesindeki "ERROR"ları da saydı, 370 yerine 414 üretti.</li>
+        <li>run1 ve run6'da model script yazmadı. Aynı <code>find/grep</code> komutlarını tekrarladı ve döngü dedektörü tarafından doğru şekilde durduruldu.</li>
+      </ul>
+      <div class="kv"><b>Aksiyon:</b> yok.</div>
+    </div>
+
+    <div class="finding s-bad">
+      <div class="top"><h3>2 · chess-best-move: append düzeltmesi hedefine ulaşmadı</h3><span class="pill">Mekanizma sağlam, model uymuyor</span></div>
+      <p>run5'te kurtarma mesajı "dosyayı parçala, <code>append=true</code> kullan" diye açıkça gönderildi. Model bunu iki kez yok sayıp aynı monolitik OpenCV script'ini baştan yazmaya çalıştı. 872 saniye sonra sunucu bağlantıyı kopardı. Kesilmeyen trial'larda ise asıl engel görselden tahta okuyamamak. Model hamle uyduruyor (<code>a7a8q</code>, <code>e2e4</code>) ve doğrulama kapısı bunu doğru şekilde reddediyor.</p>
+      <div class="kv"><b>Aksiyon:</b> yok. Append'i şemada zorunlu kılmak sonucu hardcode etmeye kayar. Kategori B/C.</div>
+    </div>
+
+    <div class="finding s-warn">
+      <div class="top"><h3>3 · regex-log: tekrarlayan tur döngüsü bitti, yerine tek turda boğulma geldi</h3><span class="pill">Yeni hata biçimi</span></div>
+      <p>Eski 95 turluk <code>write_file</code> döngüsü artık 6–20 turda yakalanıyor. Ama 4 trial'da model araç çağırmadan 4096 token'lık yozlaşmış metin üretiyor: sonsuz lookahead'li regex'ler, turu 9–13 K karakterlik analiz paragrafları. Bunu 8–11 tur art arda tekrarlıyor ve 900 saniyelik sınıra ya da sunucunun bağlantıyı koparmasına ulaşıyor.</p>
+      <ul>
+        <li>Bu 4 trial'daki "altyapı hatası" etiketi yanıltıcı. Tetikleyen modelin kendi çıktısı.</li>
+        <li>Bu 4 trial toplam output token'ın yaklaşık %52'sini yaktı (122 K / 236 K). Maliyet ve leaderboard cezası açısından en pahalı hata biçimi bu.</li>
+      </ul>
+      <div class="kv"><b>Aday:</b> araç çağrısı olmadan art arda gelen <code>finish_reason=length</code> sayısına bir sert tavan koymak. 89 görevlik koşuda token'ı korur. Henüz kodlanmadı.</div>
+    </div>
+
+    <div class="finding s-new">
+      <div class="top"><h3>4 · build-cython-ext: derliyor ama kurmuyor</h3><span class="pill">Kodlanabilir aday</span></div>
+      <p>Python3 path notu işe yaradı: <code>build_ext --inplace</code> exit 0 ile bitiyor. Ama model hiçbir trial'da <code>pip install .</code> çalıştırmıyor. Verifier <code>find_spec("pyknotid")</code> ile paketi aradığında bulamıyor ve 11 testin 9'u anında düşüyor. İkinci engel <code>fractions.gcd</code>'nin Python 3.13'te kaldırılmış olması. Bu kütüphanenin kendi sorunu (Kategori C), model onu yamamaya çalışırken döngüye giriyor.</p>
+      <div class="kv"><b>Aday not (genel, göreve özel değil):</b> "Kaynaktan derlenen bir Python paketini, görev in-place istemiyorsa <code>pip install .</code> ile ortama kur." Tek başına PASS getirmeyebilir, çünkü gcd engeli kalıyor.</div>
+    </div>
+
+    <div class="finding s-warn">
+      <div class="top"><h3>5 · configure-git-webserver: gerileme sinyali (derin analizde yok)</h3><span class="pill">Doğrulanmadı · n=2</span></div>
+      <p>v0.5'te 3/3, v0.5.1'de 1/3, v0.5.2'de 2/3 geçmişti. Bu turda puanlanan iki trial'ın ikisi de 0.</p>
+      <ul>
+        <li><b>run3 (10 tur):</b> Çok hedefli döngü dedektörü, model nginx config'ini yazıp symlink'i kurduğu ve <code>nginx -t</code> başarılı döndüğü anda "aynı 2 hedef arasında dönüyorsun" diyerek trial'ı kesti. Verifier HTTP 000 aldı, çünkü nginx hiç başlatılmamıştı. Görünüşe göre ilerleyen bir işi dedektör erken kesmiş olabilir. v0.4'teki "not found" regresyonunu hatırlatıyor.</li>
+        <li><b>run2 (31 tur):</b> AgentTimeoutError, 30 K output token. Nedeni incelenmedi.</li>
+      </ul>
+      <div class="kv"><b>Öneri:</b> Faz B'den önce bu trial'a bağımsız bir worker baktırılmalı. 89 görevde bir guardrail'in yanlış alarm vermesi birçok görevi birden etkiler.</div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <h2>Bütçe ve yol haritası</h2>
+  <div class="budget">
+    <div class="bar" role="img" aria-label="Harcanan 14 dolar, kalan 11 dolar, gelecek ay 25 dolar">
+      <div class="spent" style="width:28%"></div>
+      <div class="now" style="width:22%"></div>
+      <div class="next" style="width:50%"></div>
+    </div>
+    <div class="bar-l">
+      <span><i style="background:var(--fail);opacity:.75"></i>Harcanan $14 (v0.4 → v0.5.3)</span>
+      <span><i style="background:var(--accent)"></i>Bu ay kalan $11</span>
+      <span><i style="background:var(--accent);opacity:.4"></i>Gelecek ay $25</span>
+      <span>Toplam kalan garanti bütçe <b style="color:var(--ink)">$36</b></span>
+    </div>
+  </div>
+  <p>Skor tek koşudan (k=1) hesaplanıyor: <code>leaderboard_score = tb_score − 0,01 × (total_tokens / 1M)</code>. Yani token harcaması doğrudan skordan düşüyor. Bu canary'nin trial başına ortalaması (~266 K) 89 göreve ölçeklenirse yaklaşık 24 M token eder, bu da skordan kabaca 0,24 puan ceza demek. Bu, altyapı hatalarıyla kirlenmiş bir örneklemden yapılmış kaba bir tahmin, gerçek rakamı Faz B ölçecek.</p>
+  <div class="phases">
+    <div class="phase now"><span class="tag">Faz A · şu an</span><h3>Canary iterasyonu</h3><p>Kategori A bulgusu tükenene kadar küçük sürümlerle devam.</p></div>
+    <div class="phase"><span class="tag">Faz B</span><h3>89 görev sağlık koşusu</h3><p>k=1, n=1. Amaç skor değil: 89 görev ölçeğindeki altyapı sürprizlerini yakalamak ve Nebius panelinden gerçek $/trial'ı ölçmek.</p></div>
+    <div class="phase"><span class="tag">Faz C</span><h3>Final koşu</h3><p>B iyi giderse B'nin kendisi final olabilir. Bütçe yetmezse son sağlıklı checkpoint'te dürüstçe durulur.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Açık karar</h2>
+  <div class="decision">
+    <p><b>v0.5.4'e mi geçelim, yoksa doğrudan Faz B'ye mi?</b> Karar kullanıcıda. Lead'in önerisi:</p>
+    <ol>
+      <li>Önce 5. bulguyu (configure-git-webserver'daki döngü dedektörü) bir worker'a salt okuma modunda doğrulatmak. Ucuz, koşu parası harcamaz.</li>
+      <li>Doğrulanırsa v0.5.4'ü küçük tutmak: <code>pip install .</code> notu, döngü dedektörü için ilerleme istisnası ve art arda gelen length-kesilmelerine bir tavan. Üçü de genel kurallar, göreve özel değil.</li>
+      <li>v0.5.4'ü tam canary yerine daraltılmış bir setle (3–4 görev, n=2) doğrulayıp Faz B'ye geçmek. Bütçenin asıl kısmı B/C için saklanır.</li>
+    </ol>
+  </div>
+  <p class="note">Bu rapor mevcut bulguların derlemesidir. Yeni log analizi yalnızca 5. bulgu ve derin analizin dışında kalan 3 görev için yapıldı. Derin analiz modeli "Qwen 2.5 72B" olarak anıyor, oysa wiki ve plan Qwen3 ailesini gösteriyor. Model kimliği bu rapor için doğrulanmadı.</p>
+</section>
+
+</div>
