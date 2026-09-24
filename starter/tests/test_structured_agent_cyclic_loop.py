@@ -184,7 +184,9 @@ def test_ten_targets_cyclic_loop_triggers_stuck_loop_with_window_44(monkeypatch)
     ctx = run_structured_agent(monkeypatch, env, turns, max_turns=35)
 
     assert ctx.metadata["termination_reason"] == "stuck_loop_detected"
-    assert ctx.metadata["turns"] == 30
+    # v0.6: canonical-rotation key — the first post-nudge step of lap 3
+    # (turn 21) is the same cycle rotated, so it terminates there.
+    assert ctx.metadata["turns"] == 21
 
 
 def test_two_full_cycles_through_four_targets_with_write_file_triggers_cyclic_loop(monkeypatch):

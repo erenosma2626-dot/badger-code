@@ -104,7 +104,9 @@ from agent.structured_tools import write_file as structured_write_file
 from agent.tools import (
     classify_command,
     extract_target,
+    canonical_cycle,
     find_cyclic_multi_target_loop,
+    should_defer_cyclic_terminate,
     is_unproductive_attempt,
     output_hash,
     parse_action,
@@ -275,6 +277,10 @@ class BaselineAgent(BaseAgent):
         # same-target catches since no single target repeats consecutively
         # enough and no command text repeats verbatim enough.
         cyclic_target_history: list[str] = []
+        # v0.6 madde 1 — (tool, exit_code, output_hash) per history entry,
+        # plus every output hash seen so far (progress-aware cyclic check).
+        cyclic_evidence_history: list[tuple] = []
+        seen_output_hashes: set[str] = set()
 
         has_edited = False
         pending_verification = False
@@ -428,21 +434,29 @@ class BaselineAgent(BaseAgent):
                     target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
                 )
                 cyclic_target_history.append(target)
+                cyclic_evidence_history.append(
+                    ("shell", observation.receipt.exit_code, fingerprint[-1])
+                )
 
             exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
             cyclic_cycle = find_cyclic_multi_target_loop(
-                cyclic_target_history, CYCLIC_LOOP_WINDOW
+                cyclic_target_history, CYCLIC_LOOP_WINDOW, cyclic_evidence_history
             )
+            last_exit_code = observation.receipt.exit_code
+            last_out_hash = fingerprint[-1]
 
             if exact_repeat_stuck:
                 trigger_key = "__exact_repeat__"
             elif target_is_stuck:
                 trigger_key = target
             elif cyclic_cycle:
-                trigger_key = "__cyclic__:" + ",".join(cyclic_cycle)
+                trigger_key = "__cyclic__:" + ",".join(canonical_cycle(cyclic_cycle))
             else:
                 trigger_key = None
 
+            # seen_output_hashes is updated only after the defer check below
+            _prev_seen = set(seen_output_hashes)
+            seen_output_hashes.add(last_out_hash)
             if trigger_key is not None:
                 if trigger_key not in stuck_nudged:
                     stuck_nudged.add(trigger_key)
@@ -475,6 +489,19 @@ class BaselineAgent(BaseAgent):
                         )
                     messages.append({"role": "user", "content": nudge_content})
                     continue
+                elif (
+                    not exact_repeat_stuck
+                    and not target_is_stuck
+                    and should_defer_cyclic_terminate(
+                        last_exit_code, last_out_hash, _prev_seen
+                    )
+                ):
+                    # v0.6 madde 1(c) — exit 0 + never-seen output is
+                    # progress; postpone the cyclic hard-terminate.
+                    self.logger.info(
+                        "turn %d: cyclic terminate deferred (exit 0, new output)",
+                        turns,
+                    )
                 else:
                     self.logger.warning(
                         "turn %d: stuck loop repeated after nudge, terminating",
@@ -606,6 +633,10 @@ class StructuredToolAgent(BaseAgent):
         recent_fingerprints: deque[tuple] = deque(maxlen=STUCK_LOOP_WINDOW)
         target_attempt_counts: dict[str, int] = {}
         cyclic_target_history: list[str] = []
+        # v0.6 madde 1 — (tool, exit_code, output_hash) per history entry,
+        # plus every output hash seen so far (progress-aware cyclic check).
+        cyclic_evidence_history: list[tuple] = []
+        seen_output_hashes: set[str] = set()
         # §v0.4.1 madde 1 — stuck_nudged is now keyed per trigger (an
         # exact-repeat key, a target name, or a cyclic-cycle key) instead
         # of one global bool: a nudge received while stuck on target X no
@@ -922,21 +953,29 @@ class StructuredToolAgent(BaseAgent):
                         target_attempt_counts[target] >= STUCK_LOOP_THRESHOLD
                     )
                     cyclic_target_history.append(target)
+                    cyclic_evidence_history.append(
+                        (name, receipt.exit_code, fingerprint[-1])
+                    )
 
                 exact_repeat_stuck = repeat_count + 1 >= STUCK_LOOP_THRESHOLD
                 cyclic_cycle = find_cyclic_multi_target_loop(
-                    cyclic_target_history, CYCLIC_LOOP_WINDOW
+                    cyclic_target_history, CYCLIC_LOOP_WINDOW, cyclic_evidence_history
                 )
+                last_exit_code = receipt.exit_code
+                last_out_hash = fingerprint[-1]
 
                 if exact_repeat_stuck:
                     trigger_key = "__exact_repeat__"
                 elif target_is_stuck:
                     trigger_key = target
                 elif cyclic_cycle:
-                    trigger_key = "__cyclic__:" + ",".join(cyclic_cycle)
+                    trigger_key = "__cyclic__:" + ",".join(canonical_cycle(cyclic_cycle))
                 else:
                     trigger_key = None
 
+                # seen_output_hashes is updated only after the defer check below
+                _prev_seen = set(seen_output_hashes)
+                seen_output_hashes.add(last_out_hash)
                 if trigger_key is not None:
                     if trigger_key not in stuck_nudged:
                         stuck_nudged.add(trigger_key)
@@ -974,6 +1013,19 @@ class StructuredToolAgent(BaseAgent):
                                 targets=", ".join(cyclic_cycle),
                             )
                         messages.append({"role": "user", "content": nudge_content})
+                    elif (
+                        not exact_repeat_stuck
+                        and not target_is_stuck
+                        and should_defer_cyclic_terminate(
+                            last_exit_code, last_out_hash, _prev_seen
+                        )
+                    ):
+                        # v0.6 madde 1(c) — exit 0 + never-seen output is
+                        # progress; postpone the cyclic hard-terminate.
+                        self.logger.info(
+                            "turn %d: cyclic terminate deferred (exit 0, new output)",
+                            turns,
+                        )
                     else:
                         self.logger.warning(
                             "turn %d: stuck loop repeated after nudge, "
