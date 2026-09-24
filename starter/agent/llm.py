@@ -23,6 +23,8 @@ All settings come from environment variables (loaded from ``.env`` via
 - ``LLM_TEMPERATURE`` — Sampling temperature (default: 0.2). Lower = more
   deterministic.
 - ``LLM_MAX_TOKENS`` — Max tokens per completion (default: 4096).
+- ``LLM_REQUEST_TIMEOUT`` — Per-request timeout in seconds (default: 240).
+  SDK retries are disabled; ``LLMClient`` does its own bounded retry.
 
 Model name resolution
 =====================
@@ -78,6 +80,13 @@ def is_transient_error(exc: Exception) -> bool:
         return exc.status_code >= 500
     return False
 
+
+def _is_slow_failure(exc: Exception) -> bool:
+    """Timeout-class failures that typically surface only after a long wait."""
+    slow = (openai.APITimeoutError, httpcore.RemoteProtocolError)
+    return isinstance(exc, slow) or isinstance(exc.__cause__, slow)
+
+
 _PROVIDER_PREFIXES = (
     "ollama/",
     "openai/",
@@ -126,6 +135,7 @@ class LLMClient:
     initial_backoff: float = 2.0
     backoff_factor: float = 2.0
     max_jitter: float = 0.5
+    max_slow_retries: int = 1
 
     def __init__(self, model_name: str | None = None):
         base_url = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
@@ -137,29 +147,42 @@ class LLMClient:
         self.initial_backoff = float(os.environ.get("LLM_INITIAL_BACKOFF", "2.0"))
         self.backoff_factor = float(os.environ.get("LLM_BACKOFF_FACTOR", "2.0"))
         self.max_jitter = float(os.environ.get("LLM_MAX_JITTER", "0.5"))
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        # SDK-level retries are disabled so _create_completion is the only
+        # retry layer (otherwise attempts multiply). The SDK default read
+        # timeout (600s) would let a single hung request eat most of the
+        # agent's time budget, so bound it.
+        self.request_timeout = float(os.environ.get("LLM_REQUEST_TIMEOUT", "240"))
+        self._client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            max_retries=0,
+            timeout=self.request_timeout,
+        )
 
     async def _create_completion(self, **kwargs):
         """Invoke chat.completions.create with bounded retry and exponential backoff.
 
         Retries up to self.max_retries times for transient errors (connection errors,
         timeouts, 5xx server errors, RemoteProtocolError). Fails immediately on 4xx.
-        Total backoff wait stays well within ~30s.
+        Total backoff wait stays well within ~30s. Timeout-class errors
+        (APITimeoutError, RemoteProtocolError) usually arrive after a long
+        wait, so they are retried at most once to protect the time budget.
         """
         retries = 0
+        slow_retries = 0
         while True:
             try:
                 return await self._client.chat.completions.create(**kwargs)
             except Exception as exc:
-                max_retries = getattr(self, "max_retries", 3)
-                if not is_transient_error(exc) or retries >= max_retries:
+                if not is_transient_error(exc) or retries >= self.max_retries:
                     raise
-                initial_backoff = getattr(self, "initial_backoff", 2.0)
-                backoff_factor = getattr(self, "backoff_factor", 2.0)
-                max_jitter = getattr(self, "max_jitter", 0.5)
-                delay = initial_backoff * (backoff_factor ** retries) + random.uniform(
-                    0, max_jitter
-                )
+                if _is_slow_failure(exc):
+                    if slow_retries >= self.max_slow_retries:
+                        raise
+                    slow_retries += 1
+                delay = self.initial_backoff * (
+                    self.backoff_factor ** retries
+                ) + random.uniform(0, self.max_jitter)
                 retries += 1
                 await asyncio.sleep(delay)
 
