@@ -4,6 +4,7 @@
 
 **Kullanıcı kararı:** v0.5.3 + geçmiş nokta atışından (docs/worker-claude-dev-v06-prep-guardrail-review.md, docs/worker1-agy-v06-history-spotcheck.md) çıkan 5 genel değişiklik v0.6'ya giriyor: (1) cyclic-loop dedektörü ilerleme-farkında (3 kesin FP kanıtlı), (2) ardışık araçsız length-kesilme tavanı, (3) llm.py transient retry/backoff, (4) `pip install .` prompt notu, (5) systemd yok/`/etc/hosts` ezme ortam ipuçları. worker-claude-dev `v0.6-prep` branch'inde TDD ile uyguluyor; review ayrı claude-dev ile. Sonra v0.6 = Faz B tam koşu (k=1) — amaç BAZ İSTATİSTİK; başlatmadan önce maliyet tahmini + kullanıcı onayı.
 **Ertelenen (final koşuya):** qemu-alpine-ssh/qemu-startup Mac Docker'da nested-virt yok → kesin 0; final için x86 Linux değerlendirilecek.
+**Lead notu (2026-09-24):** 5 maddenin hepsi main'de, `v0.6` tag'i atıldı (166/166 test, `uv run --with pytest pytest -q`). Review'da agy'nin retry'ında çift-retry (SDK max_retries=2 × 600s timeout) bulundu, claude-dev düzeltti (max_retries=0, LLM_REQUEST_TIMEOUT=240s). Açık takip: exit0+değişen-çıktı döngüsü artık sadece max_turns'te durur; length-nudge etkisi Faz B'de izlenecek. Faz B kullanıcı onayı bekliyor.
 **Sonraki turlar:** kullanıcı model değişikliğini gündeme alacak. Çelişkide worker-claude-dev bulgusu esas (kullanıcı tercihi).
 
 ---
