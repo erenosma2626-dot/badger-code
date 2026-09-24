@@ -40,9 +40,13 @@ Improvement ideas
 - Track and enforce a token budget per task.
 """
 
+import asyncio
 import os
+import random
 
 from dotenv import load_dotenv
+import httpcore
+import openai
 from openai import AsyncOpenAI
 
 # override=True makes .env the single source of truth: without it, a stale
@@ -51,6 +55,28 @@ from openai import AsyncOpenAI
 # shadows every later edit to the file. To experiment with settings, edit
 # .env — or pass -m to harbor run for the model.
 load_dotenv(override=True)
+
+
+def is_transient_error(exc: Exception) -> bool:
+    """Determine whether an exception from the LLM endpoint is transient and retryable.
+
+    Retryable:
+    - openai.APIConnectionError (network drops, connection refused)
+    - openai.APITimeoutError (request timed out)
+    - httpcore.RemoteProtocolError (server dropped connection or protocol error)
+    - 5xx status codes (openai.APIStatusError with status_code >= 500)
+
+    Non-retryable:
+    - 4xx status codes (400, 401, 404, 422, etc.)
+    - other unexpected client-side errors
+    """
+    if isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError, httpcore.RemoteProtocolError)):
+        return True
+    if isinstance(exc.__cause__, (openai.APIConnectionError, openai.APITimeoutError, httpcore.RemoteProtocolError)):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code >= 500
+    return False
 
 _PROVIDER_PREFIXES = (
     "ollama/",
@@ -96,13 +122,46 @@ class LLMClient:
         Overridden by ``LLM_MODEL`` env var if set.
     """
 
+    max_retries: int = 3
+    initial_backoff: float = 2.0
+    backoff_factor: float = 2.0
+    max_jitter: float = 0.5
+
     def __init__(self, model_name: str | None = None):
         base_url = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
         api_key = os.environ.get("LLM_API_KEY", "none")
         self.model = _resolve_model(model_name)
         self.temperature = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
         self.max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4096"))
+        self.max_retries = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+        self.initial_backoff = float(os.environ.get("LLM_INITIAL_BACKOFF", "2.0"))
+        self.backoff_factor = float(os.environ.get("LLM_BACKOFF_FACTOR", "2.0"))
+        self.max_jitter = float(os.environ.get("LLM_MAX_JITTER", "0.5"))
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+    async def _create_completion(self, **kwargs):
+        """Invoke chat.completions.create with bounded retry and exponential backoff.
+
+        Retries up to self.max_retries times for transient errors (connection errors,
+        timeouts, 5xx server errors, RemoteProtocolError). Fails immediately on 4xx.
+        Total backoff wait stays well within ~30s.
+        """
+        retries = 0
+        while True:
+            try:
+                return await self._client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                max_retries = getattr(self, "max_retries", 3)
+                if not is_transient_error(exc) or retries >= max_retries:
+                    raise
+                initial_backoff = getattr(self, "initial_backoff", 2.0)
+                backoff_factor = getattr(self, "backoff_factor", 2.0)
+                max_jitter = getattr(self, "max_jitter", 0.5)
+                delay = initial_backoff * (backoff_factor ** retries) + random.uniform(
+                    0, max_jitter
+                )
+                retries += 1
+                await asyncio.sleep(delay)
 
     async def chat(self, messages: list[dict]) -> tuple[str, dict]:
         """Send the conversation history to the LLM and get a response.
@@ -128,7 +187,7 @@ class LLMClient:
               and ``"completion_tokens"`` (both int). Empty dict if the
               server doesn't report usage.
         """
-        response = await self._client.chat.completions.create(
+        response = await self._create_completion(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
@@ -203,7 +262,7 @@ class LLMClient:
         """
         import json
 
-        response = await self._client.chat.completions.create(
+        response = await self._create_completion(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
