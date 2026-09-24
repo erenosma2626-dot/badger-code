@@ -189,3 +189,45 @@ def test_chat_tools_retries_transient_error(monkeypatch):
     assert client._client.chat.completions.create.call_count == 2
     assert len(sleep_calls) == 1
     assert 2.0 <= sleep_calls[0] <= 2.5
+
+
+def test_sdk_client_has_retries_disabled_and_bounded_timeout(monkeypatch):
+    monkeypatch.delenv("LLM_REQUEST_TIMEOUT", raising=False)
+    client = LLMClient(model_name="m")
+    assert client._client.max_retries == 0
+    assert client._client.timeout == 240.0
+
+
+def test_sdk_timeout_configurable_via_env(monkeypatch):
+    monkeypatch.setenv("LLM_REQUEST_TIMEOUT", "120")
+    client = LLMClient(model_name="m")
+    assert client._client.timeout == 120.0
+
+
+def test_timeout_errors_retried_at_most_once(monkeypatch):
+    client = _create_mock_client()
+    req = _dummy_request()
+    client._client.chat.completions.create.side_effect = openai.APITimeoutError(request=req)
+    sleep_calls = []
+
+    async def fake_sleep(duration):
+        sleep_calls.append(duration)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    with pytest.raises(openai.APITimeoutError):
+        asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
+    assert client._client.chat.completions.create.call_count == 2
+    assert len(sleep_calls) == 1
+
+
+def test_remote_protocol_error_retried_at_most_once(monkeypatch):
+    client = _create_mock_client()
+    client._client.chat.completions.create.side_effect = httpcore.RemoteProtocolError("dropped")
+
+    async def fake_sleep(duration):
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    with pytest.raises(httpcore.RemoteProtocolError):
+        asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
+    assert client._client.chat.completions.create.call_count == 2
