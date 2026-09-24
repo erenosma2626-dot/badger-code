@@ -162,7 +162,14 @@ cut off by the token limit (finish_reason=length), causing the tool call or acti
 lost or invalid. Instead, split the file into logical chunks: write the first chunk with \
 append=false (or default without the parameter) to initialize the file, and append subsequent \
 chunks to the end of the file using append=true.
-13. When the task is fully complete, respond with exactly the following, \
+13. When compiling or building a Python package from source, install it into the active \
+environment using `pip install .` (or `pip install -e .`) unless the task explicitly \
+specifies an in-place build; do not leave it at `build_ext --inplace`.
+14. When managing background services, if systemd or systemctl is unavailable in the container, \
+use `service <name> start` or start the daemon process directly in the background. \
+Never overwrite `/etc/hosts` (overwriting or truncating it can break container DNS and networking); \
+if custom host entries are required, always append lines to `/etc/hosts`.
+15. When the task is fully complete, respond with exactly the following, \
 and NOTHING else — critically, do NOT put TASK_COMPLETE inside a code \
 block/fence, or it will be executed as a literal (and failing) command \
 instead of being recognized as completion:
@@ -286,7 +293,13 @@ tokens), do NOT attempt to write it all in a single write_file call — this ris
 getting cut off by the token limit (finish_reason=length), causing the tool call to be \
 completely lost or invalid. Instead, split the file into logical chunks: write the first \
 chunk with append=false (or default without the parameter) to initialize the file, and \
-append subsequent chunks to the end of the file using append=true.
+append subsequent chunks to the end of the file using append=true. \
+When compiling or building a Python package from source, install it into the active \
+environment using `pip install .` (or `pip install -e .`) unless the task explicitly \
+specifies an in-place build; do not leave it at `build_ext --inplace`. \
+When managing background services, if systemd or systemctl is unavailable in the container, \
+use `service <name> start` or start the daemon process directly. \
+Never overwrite `/etc/hosts`; if custom host entries are required, always append lines to `/etc/hosts`.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
