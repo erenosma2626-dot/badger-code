@@ -95,6 +95,7 @@ from agent.prompts import (
     SYSTEM_PROMPT,
     TARGET_STUCK_LOOP_MESSAGE,
     TRUNCATED_RESPONSE_MESSAGE,
+    REPETITIVE_TRUNCATION_MESSAGE,
     observation_message,
 )
 from agent.structured_tools import TOOL_SCHEMAS
@@ -123,6 +124,26 @@ STUCK_LOOP_THRESHOLD = 3
 # A->B->C->D->A->B->C->D cycle. 44 allows detecting cycle lengths up to 22
 # actions/distinct targets (two full laps, e.g. 9-10 files visited twice
 # per lap via read_file + cat); see tools.find_cyclic_multi_target_loop.
+LENGTH_TRUNCATION_TERMINATE_AT = 4
+"""v0.6 madde 2 — this many consecutive tool-less finish_reason=length
+turns end the run early (termination_reason=consecutive_length_truncation)
+instead of burning the rest of the budget on truncated output."""
+
+
+def has_repeated_lines(text: str, min_repeats: int = 3) -> bool:
+    """True if any non-trivial line occurs ``min_repeats``+ times — the
+    signature of a model stuck emitting the same line until max_tokens."""
+    counts: dict[str, int] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if len(line) < 4:
+            continue
+        counts[line] = counts.get(line, 0) + 1
+        if counts[line] >= min_repeats:
+            return True
+    return False
+
+
 CYCLIC_LOOP_WINDOW = int(os.environ.get("AGENT_CYCLIC_LOOP_WINDOW", "44"))
 
 
@@ -667,6 +688,10 @@ class StructuredToolAgent(BaseAgent):
 
         last_truncated_target: str | None = None
         consecutive_truncated_target_count: int = 0
+        # v0.6 madde 2 — consecutive tool-less finish_reason=length turns,
+        # regardless of target: >=2 -> "write minimal" nudge (when the raw
+        # text repeats lines), >=4 -> early terminate.
+        consecutive_length_count: int = 0
 
         for _ in range(MAX_TURNS):
             turns += 1
@@ -719,6 +744,20 @@ class StructuredToolAgent(BaseAgent):
                     text,
                 )
                 if usage.get("finish_reason") == "length":
+                    consecutive_length_count += 1
+                    if consecutive_length_count >= LENGTH_TRUNCATION_TERMINATE_AT:
+                        self.logger.warning(
+                            "turn %d: %d consecutive tool-less length "
+                            "truncations, terminating",
+                            turns,
+                            consecutive_length_count,
+                        )
+                        termination_reason = "consecutive_length_truncation"
+                        context.metadata["termination_reason"] = termination_reason
+                        context.metadata[
+                            "verification_status"
+                        ] = compute_verification_status()
+                        break
                     target_match = re.search(r'["\']path["\']\s*:\s*["\']([^"\']+)["\']', text)
                     current_target = target_match.group(1) if target_match else None
                     if current_target and current_target == last_truncated_target:
@@ -734,15 +773,19 @@ class StructuredToolAgent(BaseAgent):
                             "and was repeatedly cut off. Split the file into smaller chunks: "
                             "write the first chunk with append=false, then append subsequent chunks using append=true."
                         )
+                    if consecutive_length_count >= 2 and has_repeated_lines(text):
+                        nudge_content += "\n" + REPETITIVE_TRUNCATION_MESSAGE
                 else:
                     last_truncated_target = None
                     consecutive_truncated_target_count = 0
+                    consecutive_length_count = 0
                     nudge_content = STRUCTURED_NUDGE_MESSAGE
                 messages.append({"role": "user", "content": nudge_content})
                 continue
 
             last_truncated_target = None
             consecutive_truncated_target_count = 0
+            consecutive_length_count = 0
 
             # Exactly one tool call per turn by prompt contract; if the
             # model sends more, only the first is executed and the rest
