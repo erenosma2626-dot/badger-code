@@ -33,17 +33,15 @@ so both styles work transparently.
 
 Improvement ideas
 =================
+- Add retry logic with exponential backoff for transient failures.
 - Add streaming support for faster time-to-first-token.
 - Route different task types to different models (e.g., a small model for
   simple commands, a large model for complex reasoning).
 - Track and enforce a token budget per task.
 """
 
-import asyncio
 import os
 
-import httpx
-import openai
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -85,39 +83,6 @@ def _resolve_model(model_name: str | None) -> str:
     return model
 
 
-LLM_MAX_ATTEMPTS = 3
-"""v0.6 madde 3 — total attempts (1 + 2 retries) for a transient failure."""
-LLM_BACKOFF_BASE_SEC = 2.0
-"""Backoff before retry k (k=1,2,...) is ``base * 2**(k-1)`` -> 2s, 4s:
-at most ~6s of sleeping per call, small against the 900s agent budget."""
-
-_TRANSIENT_ERRORS = (
-    openai.APIConnectionError,  # includes APITimeoutError
-    openai.InternalServerError,  # 5xx
-    httpx.RemoteProtocolError,
-    httpx.TimeoutException,
-)
-
-
-def _is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, _TRANSIENT_ERRORS):
-        return True
-    status = getattr(exc, "status_code", None)
-    return isinstance(exc, openai.APIStatusError) and status is not None and status >= 500
-
-
-async def _create_with_retry(completions, **kwargs):
-    """Call ``completions.create`` with bounded retry + exponential backoff
-    on transient errors only; 4xx / invalid requests propagate at once."""
-    for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
-        try:
-            return await completions.create(**kwargs)
-        except Exception as exc:
-            if attempt >= LLM_MAX_ATTEMPTS or not _is_transient(exc):
-                raise
-            await asyncio.sleep(LLM_BACKOFF_BASE_SEC * 2 ** (attempt - 1))
-
-
 class LLMClient:
     """Async client for OpenAI-compatible chat completions.
 
@@ -137,9 +102,7 @@ class LLMClient:
         self.model = _resolve_model(model_name)
         self.temperature = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
         self.max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4096"))
-        # max_retries=0: retries are owned by _create_with_retry (v0.6), so
-        # the SDK's own retry loop must not multiply them.
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key, max_retries=0)
+        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     async def chat(self, messages: list[dict]) -> tuple[str, dict]:
         """Send the conversation history to the LLM and get a response.
@@ -165,8 +128,7 @@ class LLMClient:
               and ``"completion_tokens"`` (both int). Empty dict if the
               server doesn't report usage.
         """
-        response = await _create_with_retry(
-            self._client.chat.completions,
+        response = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
@@ -241,8 +203,7 @@ class LLMClient:
         """
         import json
 
-        response = await _create_with_retry(
-            self._client.chat.completions,
+        response = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
