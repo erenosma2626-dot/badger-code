@@ -35,8 +35,10 @@ def _compact_tool_content(content: str) -> str:
     out = {"old_result": True}
     for key in ("tool", "exit_code", "timed_out", "error", "output_ref",
                 "content_bytes", "total_lines", "acknowledged", "reason"):
-        if data.get(key) not in (None, "", [], False):
-            out[key] = data[key]
+        val = data.get(key)
+        if val is None or val == "" or val == [] or val is False:
+            continue
+        out[key] = val
     for key in ("stdout_tail", "stderr_tail"):
         if data.get(key):
             out[key] = _short(data[key], _OLD_EXCERPT_CHARS)

@@ -27,12 +27,11 @@ LONG_COMMAND_TIMEOUT_SEC = int(os.environ.get("AGENT_LONG_COMMAND_TIMEOUT_SEC", 
 _LONG_RUNNING_RE = re.compile(
     r"""(?x)
     \b(apt-get|apt|aptitude)\s+(-\S+\s+)*(install|update|upgrade|dist-upgrade|build-dep)\b
-    | \bpip3?\s+install\b | \b-m\s+pip\s+install\b | \buv\s+(pip\s+install|sync)\b
+    | \bpip3?\s+install\b | (^|\s)-m\s+pip\s+install\b | \buv\s+(pip\s+install|sync)\b
     | \bconda\s+(install|create|env)\b | \bmamba\s+install\b
     | \bnpm\s+(install|ci)\b | \byarn(\s+install)?\s*($|&&|;) | \bpnpm\s+install\b
     | \bcargo\s+(build|install|test)\b | \bgo\s+(build|install|mod\s+download)\b
-    | (^|[\s;&|(])make(\s|$) | \bcmake\s+--build\b | \bninja\b
-    | (^|[\s;&|(])\./configure\b | \bmvn\s | \bgradle\s | \bgem\s+install\b
+    | \bcmake\s+--build\b | \bmvn\s | \bgradle\s | \bgem\s+install\b
     | install\.packages\( | \bopam\s+install\b | \bstack\s+build\b
     """
 )
@@ -43,7 +42,7 @@ _FOREGROUND_RE = re.compile(
     r"""(?x)
     daemon\s+off
     | \bsshd\b[^;&|]*\s-D\b
-    | \b-m\s+http\.server\b
+    | (^|\s)-m\s+http\.server\b
     | \b(uvicorn|gunicorn|hypercorn)\s+\S
     | \bflask\s+run\b
     | \bredis-server\b(?![^;&|]*--daemonize\s+yes)
@@ -56,9 +55,25 @@ _FOREGROUND_RE = re.compile(
 _DAEMONIZED_RE = re.compile(r"(&\s*$)|\bnohup\b|\bsetsid\b|\bdisown\b|\bdaemonize\b|\btmux\b|\bscreen\s+-d")
 
 
+_LONG_SEGMENT_HEADS = {"make", "ninja", "./configure", "configure", "bootstrap", "./bootstrap"}
+
+
+def _segment_heads(command: str) -> list[str]:
+    heads = []
+    for segment in re.split(r"&&|\|\||;|\||\n|\(", command):
+        words = segment.strip().split()
+        while words and "=" in words[0]:
+            words = words[1:]
+        if words:
+            heads.append(words[0])
+    return heads
+
+
 def command_timeout(command: str, default: int) -> int:
     """Timeout for ``command``: long for install/build steps, else default."""
-    if _LONG_RUNNING_RE.search(command):
+    if _LONG_RUNNING_RE.search(command) or any(
+        h in _LONG_SEGMENT_HEADS for h in _segment_heads(command)
+    ):
         return max(default, LONG_COMMAND_TIMEOUT_SEC)
     return default
 

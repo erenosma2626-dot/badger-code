@@ -85,6 +85,7 @@ from harbor.models.agent.context import AgentContext
 
 from agent.llm import LLMClient
 from agent.prompts import (
+    BUDGET_WARNING_MESSAGE,
     COMPLETION_EVIDENCE_MESSAGE,
     CYCLIC_LOOP_MESSAGE,
     NUDGE_MESSAGE,
