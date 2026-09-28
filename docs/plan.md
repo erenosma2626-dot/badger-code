@@ -1,5 +1,21 @@
 # Badger Code — Canlı Plan
 
+> **Çalışma düzeni değişti (2026-09-24):** CAO bırakıldı, orkestrasyon AionUi'de.
+> Aşağıdaki kayıtlardaki `worker1-agy`, `worker-claude-dev`, `worker3-*`,
+> `supervisor` isimleri eski CAO düzenine ait. Yeni karşılıkları: agy → Uygulayıcı
+> (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
+> Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
+
+## 🔴 2026-09-28 — v0.6 FAZ B (89 GÖREV TAM KOŞU) SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
+
+**Koşu:** `jobs/v06-full-run1` (2026-09-24 12:41 → 09-25 00:23, ajan süresi 7,2 sa). Rapor: `docs/v0.6-full-run-report.html`.
+
+**Sonuç:** 4/89 geçti (build-pmars, modernize-scientific-stack, nginx-request-logging, portfolio-optimization) → tb_score 0,0449. Toplam 36,54M token → **leaderboard_score −0,320**. 3 hata (2 AgentTimeout, 1 VerifierTimeout), APIConnectionError yok; altyapı 89 ölçeğinde sağlam (Faz B'nin amacı ✓).
+
+**Bulgular:** (1) Token cezası skordan 7 kat büyük; girdi/çıktı 55:1, en pahalı 20 görev tokenin %68'i ve hepsi 0. Geçenlerin hepsi ≤302k. (2) Sonlanma: stuck-loop 34, task_complete 29 (25'i yanlış), length-kesilme 14, kanıtsız bitiş 6, max_turns 4. (3) `verification_status=passed` 39 → sadece 4 gerçek geçiş. (4) configure-git-webserver / log-summary-date-ranges / sqlite-with-gcov 0 aldı; önceki %20–30 başarı oranıyla k=1 varyansı içinde.
+
+**Lead notu (2026-09-28):** v0.6 olduğu gibi Faz C olarak gönderilmemeli (negatif skor). Sıradaki iş token verimliliği: geçmiş kırpma + görev başı token bütçesi. $ maliyeti ölçülmedi, Nebius panelinden okunmalı. **Açık karar (kullanıcı):** v0.7 kapsamı (token verimliliği) ve bütçe Faz C'ye yetiyor mu.
+
 ## 🔵 2026-09-24 — v0.6 HAZIRLIĞI BAŞLADI (Faz B = ilk 89-görev tam koşu) — YENİ SOHBET BURADAN OKUMALI
 
 **Kullanıcı kararı:** v0.5.3 + geçmiş nokta atışından (docs/worker-claude-dev-v06-prep-guardrail-review.md, docs/worker1-agy-v06-history-spotcheck.md) çıkan 5 genel değişiklik v0.6'ya giriyor: (1) cyclic-loop dedektörü ilerleme-farkında (3 kesin FP kanıtlı), (2) ardışık araçsız length-kesilme tavanı, (3) llm.py transient retry/backoff, (4) `pip install .` prompt notu, (5) systemd yok/`/etc/hosts` ezme ortam ipuçları. worker-claude-dev `v0.6-prep` branch'inde TDD ile uyguluyor; review ayrı claude-dev ile. Sonra v0.6 = Faz B tam koşu (k=1) — amaç BAZ İSTATİSTİK; başlatmadan önce maliyet tahmini + kullanıcı onayı.
@@ -196,7 +212,7 @@
   - [ ] **5b (koşullu, sonra):** Planlama/doğrulama + context compaction eklenirken if/elif dallanması **3'ten fazla bağımsız koşullu dala** çıkarsa, LangGraph'a geçiş kararını **veriyle** (hangi commit'te kaç dal, hangi görev sınıfı zorluyor) yeniden değerlendir. Eşiğe ulaşmadan LangGraph'a geçilmez — erken soyutlama riskinden kaçınmak için.
 - [ ] **6. Tavily'yi kısıtlı docs-tool olarak ekle** — domain filtresi, referans-çözüm sorgu engeli, sonuç uzunluğu sınırı, çağrı logu.
 - [ ] **7. Temsili görev alt-kümesinde iterasyon** — git/build/test/servis-kurulum/dosya-işlemleri sınıflarından sabit küçük set, başarı+maliyet+tur+timeout birlikte izlenir.
-- [ ] **8. Tüm 89 görev — kontrollü kampanya** — önce küçük modelle sağlık kontrolü, sonra final konfigürasyonla tam koşu; kesintiye dayanıklı (tamamlanan görev tekrar koşulmaz).
+- [~] **8. Tüm 89 görev — kontrollü kampanya** — (2026-09-28: Faz B sağlık koşusu yapıldı, 4/89, leaderboard −0,32; final koşu bekliyor) — önce küçük modelle sağlık kontrolü, sonra final konfigürasyonla tam koşu; kesintiye dayanıklı (tamamlanan görev tekrar koşulmaz).
 - [ ] **9. Maliyet/token/skor analizi** — TB score, görev-sınıfı bazlı başarı, token cezası, $ maliyet, Qwen vs gpt-oss karşılaştırması.
 - [ ] **10. Açık kaynak teslim paketi** — temiz public repo + sabit tag, kurulum talimatı, Kaggle Writeup.
 
