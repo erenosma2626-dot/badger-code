@@ -294,3 +294,14 @@ def test_three_consecutive_length_truncations_terminate(monkeypatch):
     ctx, _ = run_agent(monkeypatch, RecordingEnv(), [(f"b{i}", [], L) for i in range(9)])
     assert ctx.metadata["termination_reason"] == "consecutive_length_truncation"
     assert ctx.metadata["turns"] == 3
+
+
+# --- prompts --------------------------------------------------------------------
+
+def test_structured_prompt_v07_guidance():
+    from agent.prompts import BUDGET_WARNING_MESSAGE, STRUCTURED_SYSTEM_PROMPT, TARGET_STUCK_LOOP_MESSAGE
+    p = STRUCTURED_SYSTEM_PROMPT.lower()
+    assert "each explicit requirement" in p
+    assert "start_line" in p and "background" in p and "budget" in p
+    assert "task_complete" in BUDGET_WARNING_MESSAGE
+    assert "start_line" in TARGET_STUCK_LOOP_MESSAGE

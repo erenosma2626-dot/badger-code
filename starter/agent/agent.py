@@ -98,6 +98,14 @@ from agent.prompts import (
     REPETITIVE_TRUNCATION_MESSAGE,
     observation_message,
 )
+from agent.command_policy import (
+    background_foreground_server,
+    command_timeout,
+    fingerprint_command,
+    is_foreground_server,
+    prepare_command,
+)
+from agent.context_budget import compact_messages
 from agent.structured_tools import TOOL_SCHEMAS
 from agent.structured_tools import read_file as structured_read_file
 from agent.structured_tools import terminal_exec as structured_terminal_exec
@@ -124,10 +132,24 @@ STUCK_LOOP_THRESHOLD = 3
 # A->B->C->D->A->B->C->D cycle. 44 allows detecting cycle lengths up to 22
 # actions/distinct targets (two full laps, e.g. 9-10 files visited twice
 # per lap via read_file + cat); see tools.find_cyclic_multi_target_loop.
-LENGTH_TRUNCATION_TERMINATE_AT = 4
+LENGTH_TRUNCATION_TERMINATE_AT = 3
 """v0.6 madde 2 — this many consecutive tool-less finish_reason=length
 turns end the run early (termination_reason=consecutive_length_truncation)
-instead of burning the rest of the budget on truncated output."""
+instead of burning the rest of the budget on truncated output. v0.7: 4 -> 3
+(all 14 Faz B trials that hit the cap scored 0)."""
+
+TOKEN_BUDGET = int(os.environ.get("AGENT_TOKEN_BUDGET", "300000"))
+"""v0.7 H2 — per-task input+output token budget. The leaderboard charges
+0.01 per 1M tokens; in Faz B every passing trial used <=302k (before
+history compaction) while the 20 most expensive trials used 68% of all
+tokens and all scored 0."""
+
+BUDGET_WARN_FRACTION = 0.7
+"""Share of TOKEN_BUDGET at which the model is told once to wrap up."""
+
+KEEP_RECENT_TOOL_RESULTS = int(os.environ.get("AGENT_KEEP_RECENT_TOOL_RESULTS", "6"))
+"""v0.7 H1 — tool results older than this many are compacted in the view
+sent to the LLM (see agent/context_budget.py)."""
 
 
 def has_repeated_lines(text: str, min_repeats: int = 3) -> bool:
@@ -147,7 +169,13 @@ def has_repeated_lines(text: str, min_repeats: int = 3) -> bool:
 CYCLIC_LOOP_WINDOW = int(os.environ.get("AGENT_CYCLIC_LOOP_WINDOW", "44"))
 
 
-_PASSIVE_COMMAND_PREFIXES = ("cat", "ls", "chmod", "chown", "echo", "pwd", "head", "tail")
+_PASSIVE_COMMAND_PREFIXES = (
+    "cat", "ls", "chmod", "chown", "echo", "pwd", "head", "tail",
+    # v0.7 H6 — also never verification on their own
+    "cd", "grep", "egrep", "find", "wc", "stat", "file", "which", "mkdir",
+    "sleep", "ps", "true", "touch", "cp", "mv", "export", "printf", "sort",
+    "uniq", "less", "more", "type", "whoami", "id", "env", "date",
+)
 """§v0.4.1 madde 3 — commands whose first word marks them as purely
 passive/administrative (reading a file back, listing a directory, setting
 permissions) rather than genuine verification (running a test, executing
@@ -167,8 +195,16 @@ def is_meaningful_verification(command: str) -> bool:
     are handled separately since they're never routed through this
     function (see the call sites in ``StructuredToolAgent.run``).
     """
-    first_word = command.strip().split(maxsplit=1)[0] if command.strip() else ""
-    return first_word not in _PASSIVE_COMMAND_PREFIXES
+    # v0.7 H6 — judge every segment of a chain/pipe, not just the first
+    # word: `cd /app && ls` passed as "verification" before, which is how
+    # 35 of 39 Faz B trials reported verification_status=passed yet failed.
+    for segment in re.split(r"&&|\|\||;|\||\n", command):
+        words = segment.strip().split()
+        while words and "=" in words[0] and not words[0].startswith("="):
+            words = words[1:]  # VAR=value prefix
+        if words and words[0] not in _PASSIVE_COMMAND_PREFIXES:
+            return True
+    return False
 
 
 BOOTSTRAP_COMMAND = (
@@ -693,10 +729,18 @@ class StructuredToolAgent(BaseAgent):
         # text repeats lines), >=4 -> early terminate.
         consecutive_length_count: int = 0
 
+        budget_warned = False
+
         for _ in range(MAX_TURNS):
             turns += 1
 
-            text, tool_calls, usage = await llm.chat_tools(messages, TOOL_SCHEMAS)
+            if not budget_warned and n_input + n_output >= TOKEN_BUDGET * BUDGET_WARN_FRACTION:
+                budget_warned = True
+                messages.append({"role": "user", "content": BUDGET_WARNING_MESSAGE})
+
+            text, tool_calls, usage = await llm.chat_tools(
+                compact_messages(messages, KEEP_RECENT_TOOL_RESULTS), TOOL_SCHEMAS
+            )
             n_input += usage.get("prompt_tokens", 0)
             n_output += usage.get("completion_tokens", 0)
 
@@ -727,6 +771,16 @@ class StructuredToolAgent(BaseAgent):
                     for call in tool_calls
                 ]
             messages.append(assistant_msg)
+
+            if n_input + n_output >= TOKEN_BUDGET:
+                self.logger.warning(
+                    "turn %d: token budget exhausted (%d >= %d), terminating",
+                    turns, n_input + n_output, TOKEN_BUDGET,
+                )
+                termination_reason = "token_budget_exhausted"
+                context.metadata["termination_reason"] = termination_reason
+                context.metadata["verification_status"] = compute_verification_status()
+                break
 
             if not tool_calls:
                 # Observability for the tool-call parser mismatch (see
@@ -864,9 +918,25 @@ class StructuredToolAgent(BaseAgent):
 
             if name == "terminal_exec":
                 command = args.get("command", "")
+                # v0.7 H3/H4 — apt waits for the dpkg lock, install/build
+                # steps get a long timeout, foreground servers are detached.
+                exec_command = prepare_command(command)
+                backgrounded = is_foreground_server(command)
+                if backgrounded:
+                    bg_log = f"/tmp/agent_bg_{turns}.log"
+                    exec_command = background_foreground_server(exec_command, bg_log)
                 receipt = await structured_terminal_exec(
-                    environment, command, timeout_sec=COMMAND_TIMEOUT_SEC
+                    environment,
+                    exec_command,
+                    timeout_sec=command_timeout(command, COMMAND_TIMEOUT_SEC),
                 )
+                if backgrounded:
+                    receipt.warning = (
+                        "This command runs a server in the foreground (it never "
+                        "returns), so it was started in the background instead; "
+                        f"log: {bg_log}. Check it with curl/ss/ps or the log, do "
+                        "not start it again."
+                    )
                 action_since_nudge = True
                 meaningful = is_meaningful_verification(command)
                 if meaningful:
@@ -915,7 +985,10 @@ class StructuredToolAgent(BaseAgent):
                 meaningful_action_since_nudge = True
             elif name == "read_file":
                 receipt = await structured_read_file(
-                    environment, args.get("path", ""), timeout_sec=COMMAND_TIMEOUT_SEC
+                    environment,
+                    args.get("path", ""),
+                    timeout_sec=COMMAND_TIMEOUT_SEC,
+                    start_line=args.get("start_line", 1),
                 )
                 # §v0.4.1 madde 3 — read_file is a passive readback (often
                 # the model reading its own edit back as "proof"); it counts
@@ -970,7 +1043,8 @@ class StructuredToolAgent(BaseAgent):
                 )
                 fingerprint = (
                     name,
-                    command_or_path,
+                    fingerprint_command(command_or_path)
+                    if name == "terminal_exec" else command_or_path,
                     receipt.exit_code,
                     output_hash(combined_output),
                 )
