@@ -6,6 +6,13 @@
 > (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
 > Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
 
+## 🟢 2026-09-28 — v0.7 UYGULANDI (token verimliliği + komut yönetimi) — YENİ SOHBET BURADAN OKUMALI
+
+**Dal:** `feature/v0.7-token-verimlilik` (main'e merge edilmedi). Leader kullanıcının açık isteğiyle kendisi uyguladı. TDD, 186/186 test.
+**Değişiklikler:** H1 geçmiş kırpma (`agent/context_budget.py`, son 6 sonuç tam), H2 görev başı token bütçesi 300k (`AGENT_TOKEN_BUDGET`, %70 uyarı, `token_budget_exhausted`), H3 kurulum/derleme 300 sn + apt kilit bekleme + zaman aşımı ipucu, H4 ön plan sunucuları otomatik arka plan (`agent/command_policy.py`), H5 PID normalize parmak izi, H6 zincir-komut doğrulama tanımı + prompt'ta gereksinim bazlı doğrulama, H7 length sınırı 4→3, read_file baştan pencere + `start_line` + ikili dosya özeti (eski sürüm SON 3000 karakteri gösteriyordu), terminal çıktısı baş+son.
+**Faz B tekrar oynatma:** 121 zaman aşımının 108'i kapsanıyor; bağlam −%37. Tahmin: ~14M token, 4 geçişle ~−0,10.
+**Sıradaki (kullanıcı onayı):** 7 görev × n=2 canary (sqlite-with-gcov, configure-git-webserver, log-summary-date-ranges + Faz B'de geçen 4). Rapor: `docs/v0.6-full-run-report.html` en alt bölüm.
+
 ## 🔴 2026-09-28 — v0.6 FAZ B (89 GÖREV TAM KOŞU) SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
 
 **Koşu:** `jobs/v06-full-run1` (2026-09-24 12:41 → 09-25 00:23, ajan süresi 7,2 sa). Rapor: `docs/v0.6-full-run-report.html`.

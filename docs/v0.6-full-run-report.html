@@ -156,4 +156,42 @@ td.task{font-family:var(--mono);font-size:13px;white-space:nowrap}
 <li><b>B'yi C olarak göndermek:</b> önerilmez; negatif skor. Dürüstlük ilkesi gereği bütçe yetmezse son sağlıklı noktada durma kararı Faz C maliyetine göre verilmeli.</li>
 <li><b>Model değişikliği:</b> 4096 tavanı ve öz-doğrulama sorunları model sınırına işaret ediyor; token-verimli scaffold hazır olmadan model değiştirmek maliyeti artırır.</li></ol>
 <p class="note">Kaynak: <code>jobs/v06-full-run1/*/result.json</code> (agent_result.metadata), verifier çıktıları, trial.log. Maliyet ($) ölçülmedi. Önceki canary karşılaştırması sadece o koşularda yer alan 10 görevi kapsar.</p></section>
+
+<section><div class="eyebrow">Güncelleme · 2026-09-28 · v0.7</div>
+<h2>v0.7 uygulandı: bulunan her sorun için scaffold çözümü</h2>
+<p class="muted">Dal <code>feature/v0.7-token-verimlilik</code>. TDD: önce 22 yeni test (kırmızı), sonra kod. Tüm test paketi 186/186 yeşil. Tamamı genel scaffold değişikliği; göreve özel kod yok. Henüz gerçek koşu yapılmadı.</p>
+<div class="stats">
+<div class="stat"><span class="n">108 / 121</span><span class="l">Faz B zaman aşımı yeni kurallarla kapsanıyor (45 arka plana, 63 uzun süre)</span></div>
+<div class="stat"><span class="n">−%37</span><span class="l">geçmiş kırpma ile son bağlam boyutu (Faz B transkriptleri üzerinde tekrar oynatma)</span></div>
+<div class="stat"><span class="n">300k</span><span class="l">görev başı token bütçesi (%70'te tek uyarı)</span></div>
+<div class="stat"><span class="n">186</span><span class="l">test yeşil (166 → 186)</span></div>
+</div>
+<div class="findings">
+<div class="finding s-new"><div class="top"><h3>H1 · Geçmiş kırpma</h3><span class="pill">agent/context_budget.py</span></div>
+<p>Modele gönderilen görünümde sadece son 6 araç sonucu tam; eskiler exit kodu, hata ve 200 karakterlik özet olarak kalıyor. Eski write_file içerikleri ve uzun düşünce metinleri kısaltılıyor. Tam transkript log için değişmeden tutuluyor, araç çağrısı id eşleşmeleri korunuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H2 · Görev başı token bütçesi</h3><span class="pill">AGENT_TOKEN_BUDGET</span></div>
+<p>Varsayılan 300k girdi+çıktı. %70'te bir kez "keşfi bırak, doğrula, bitir" mesajı; %100'de <code>token_budget_exhausted</code> ile sonlanma. Faz B'de geçen 4 görev kırpma öncesi bile ≤302k idi. max_turns'e varan görevler (ort. 1,9M) artık otomatik kesiliyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H3 · Uzun komutlar ve dpkg kilidi</h3><span class="pill">agent/command_policy.py</span></div>
+<p>apt, pip, conda, npm, cargo, make, configure, R install.packages vb. 300 sn zaman aşımı alıyor (normal 60 sn). apt komutlarına otomatik <code>DEBIAN_FRONTEND=noninteractive</code> ve <code>-o DPkg::Lock::Timeout=120</code> ekleniyor: kilitte hata yerine bekliyor. Zaman aşımına uğrayan komutun receipt'inde somut kurtarma ipucu var (nohup + log, apt için bir kez <code>dpkg --configure -a</code>, PID'le kill döngüsü yapma).</p></div>
+<div class="finding s-new"><div class="top"><h3>H4 · Ön planda sunucu</h3><span class="pill">otomatik arka plan</span></div>
+<p><code>daemon off</code>, <code>sshd -D</code>, <code>http.server</code>, uvicorn/gunicorn, flask run, redis-server, npm start gibi dönmeyen komutlar nohup ile arka planda çalıştırılıp log'un son 20 satırı gösteriliyor; receipt modele "tekrar başlatma, curl/ss ile kontrol et" diyor. Zaten <code>&amp;</code>/nohup/setsid içerenlere dokunulmuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H5 · Döngü parmak izi</h3><span class="pill">PID normalizasyonu</span></div>
+<p>Tam tekrar algılayıcısı komut metnindeki çok haneli sayıları normalize ediyor (<code>kill 1107</code> = <code>kill 1130</code>). Çalıştırılan komut değişmiyor. nginx'in ~25 turluk PID döngüsü artık 3. turda yakalanır.</p></div>
+<div class="finding s-new"><div class="top"><h3>H6 · Doğrulama tanımı</h3><span class="pill">is_meaningful_verification</span></div>
+<p>Zincir ve pipe komutlarının her parçası kontrol ediliyor; <code>cd &amp;&amp; ls</code>, grep, find, wc, stat vb. tek başına doğrulama sayılmıyor. Sistem prompt'unda 8. adım: "görevin her açık gereksinimini çıktısı kanıtlayan bir komutla kontrol et, sayısal sonuçları bağımsız yeniden hesapla, dosyanın var olması doğrulama değildir".</p></div>
+<div class="finding s-new"><div class="top"><h3>read_file penceresi + ikili dosya</h3><span class="pill">yeni bulgu</span></div>
+<p>Analiz sırasında bulunan hata: eski read_file dosyanın <b>son</b> 3000 karakterini döndürüyordu, büyük dosyaların başı hiç görünmüyordu. Makefile.in, bottle.py gibi dosyaların tekrar tekrar okunduğu döngüler buradan besleniyordu. Artık dosyanın başından 200 satır / 4000 karakterlik pencere, <code>total_lines</code> ve <code>next_start_line</code> dönüyor; araçta yeni <code>start_line</code> parametresi var. İkili dosyalar (gpt2 ckpt, weights.pt, .bin) dökülmüyor, boyut + ilk 32 bayt hex + "script ile incele" uyarısı dönüyor. terminal_exec uzun çıktıda artık baş (800) + son kısmı birlikte tutuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H7 · Length sınırı ve prompt</h3><span class="pill">4 → 3</span></div>
+<p>Art arda length kesilmesi 3'te sonlanıyor (Faz B'de bu yola giren 14 görevin hepsi 0 aldı). Sistem prompt'una kısa bir VERİMLİLİK bloğu eklendi (az tur, pencereli okuma, ikiliyi okuma, kurulumu bir kez çalıştır, sunucuyu arka planda başlat). Hedef-döngü uyarısı artık start_line/<code>grep -n</code> ve yöntem değiştirme öneriyor.</p></div>
+</div>
+<div class="scroll"><table><tr><th>Ölçüt</th><th>v0.6 (Faz B)</th><th>v0.7 beklenti (simülasyon)</th></tr>
+<tr><td>Toplam token</td><td class="tally">36,5M</td><td class="tally">~14M (kırpma + 300k bütçe)</td></tr>
+<tr><td>Leaderboard (4 geçişle)</td><td class="tally">−0,320</td><td class="tally">~−0,10</td></tr>
+<tr><td>Başabaş için gereken geçiş</td><td class="tally">33</td><td class="tally">~13</td></tr>
+<tr><td>Kurtarılması beklenen görevler</td><td>—</td><td>sqlite-with-gcov, configure-git-webserver (H3/H4); log-summary (H6, model varyansı)</td></tr></table></div>
+<div class="decision"><h2>Sıradaki adım</h2><ol>
+<li>7 görevlik canary (n=2): sqlite-with-gcov, configure-git-webserver, log-summary-date-ranges + Faz B'de geçen 4 görev (regresyon kontrolü). Ölçüt: geçen 4 korunuyor mu, görev başı token.</li>
+<li>Canary iyi çıkarsa Faz C tam koşu. Bütçe: canary ≈ 14 trial, düşük maliyet; tam koşu v0.6'nın yaklaşık %40'ı token.</li>
+<li>Tahminler Faz B transkriptlerinin tekrar oynatılmasına dayanıyor; model davranışı değişeceği için gerçek koşu şart.</li></ol></div>
+</section>
 </div></body></html>

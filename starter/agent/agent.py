@@ -618,7 +618,7 @@ class StructuredToolAgent(BaseAgent):
         return "mlm26-structured-tools"
 
     def version(self) -> str | None:
-        return "0.3.0"
+        return "0.7.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
         pass
