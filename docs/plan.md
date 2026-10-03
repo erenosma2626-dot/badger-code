@@ -6,6 +6,11 @@
 > (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
 > Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
 
+## 🟢 2026-10-03 — v0.7 TAM KOŞU SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
+
+**Koşu:** `jobs/v07-full-run1` (ağ kesintisi nedeniyle 2 kez `harbor job resume -f APIConnectionError -f APITimeoutError -f CancelledError`). Sonuç: **5/89** (constraints-scheduling, log-summary-date-ranges, modernize-scientific-stack, multi-source-data-merger, nginx-request-logging), **13,36M token** (v0.6: 36,54M), **leaderboard −0,077** (v0.6: −0,320). Rapor: `docs/v0.6-full-run-report.html` en alt bölüm.
+**Lead notu:** Mekanizmalar doğrulandı (zaman aşımı 121→29, dpkg kilidi 21→7 görev, 32 sunucu arka plana). build-pmars ve portfolio-optimization kaybedildi (model strateji varyansı). 16 görev 300k bütçeyi doldurup tokenin %37'sini yedi; 200k bütçe simülasyonu −0,053. Kalan sorunlar büyük ölçüde model yetkinliği. **Açık karar (kullanıcı):** v0.7 main'e merge; v0.7.1 (200k + `tail -f` düzeltmesi); model değişikliği.
+
 ## 🟢 2026-09-28 — v0.7 UYGULANDI (token verimliliği + komut yönetimi) — YENİ SOHBET BURADAN OKUMALI
 
 **Dal:** `feature/v0.7-token-verimlilik` (main'e merge edilmedi). Leader kullanıcının açık isteğiyle kendisi uyguladı. TDD, 186/186 test.

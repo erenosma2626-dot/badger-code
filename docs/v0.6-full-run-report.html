@@ -194,4 +194,40 @@ td.task{font-family:var(--mono);font-size:13px;white-space:nowrap}
 <li>Canary iyi çıkarsa Faz C tam koşu. Bütçe: canary ≈ 14 trial, düşük maliyet; tam koşu v0.6'nın yaklaşık %40'ı token.</li>
 <li>Tahminler Faz B transkriptlerinin tekrar oynatılmasına dayanıyor; model davranışı değişeceği için gerçek koşu şart.</li></ol></div>
 </section>
+
+<section><div class="eyebrow">Güncelleme · 2026-10-03 · v07-full-run1 sonucu</div>
+<h2>v0.7 tam koşu: 5/89, token %63 düştü, skor −0,320 → −0,077</h2>
+<p class="muted">89 görev, k=1, aynı model (Qwen3-30B-A3B), aynı dataset. Koşu internet kesintileri yüzünden iki kez <code>harbor job resume</code> ile sürdürüldü; ağ hatası alan 7 trial (<code>APIConnectionError</code>/<code>APITimeoutError</code>/<code>CancelledError</code>) silinip yeniden koşuldu. Son durumda altyapı hatası yok; 2 AgentTimeout + 1 VerifierTimeout (v0.6 ile aynı sayı).</p>
+<div class="stats">
+<div class="stat"><span class="n">5 / 89</span><span class="l">geçen görev · tb_score 0,056 (v0.6: 4/89)</span></div>
+<div class="stat"><span class="n">13,36M</span><span class="l">toplam token (v0.6: 36,54M) · tahmin 13,9M idi</span></div>
+<div class="stat"><span class="n" style="color:var(--tout)">−0,077</span><span class="l">leaderboard_score (v0.6: −0,320) · +0,243 iyileşme</span></div>
+<div class="stat"><span class="n">126k</span><span class="l">görev başı medyan token (v0.6: 203k) · girdi/çıktı 55 → 29</span></div>
+</div>
+<div class="findings">
+<div class="finding s-good"><div class="top"><h3>Mekanizmalar çalıştı</h3><span class="pill">doğrulandı</span></div>
+<ul><li>Komut zaman aşımı 121 → 29. apt kilidi/yarım dpkg görülen görev 21 → 7.</li>
+<li>32 ön plan sunucu komutu otomatik arka plana alındı (v0.6: 0).</li>
+<li>215 pencereli read_file, 26 ikili dosya okuması özetlendi (eskiden dökülüyordu).</li>
+<li>v0.6'nın en pahalı 5 görevi (code-from-image 2,5M, custom-memory-heap-crash, install-windows-3.11, compile-compcert, password-recovery) her biri 1,4–2,4M token daha az harcadı.</li></ul></div>
+<div class="finding s-new"><div class="top"><h3>2 yeni geçiş, 2 kayıp</h3><span class="pill">varyans</span></div>
+<p><b>Kazanılan:</b> constraints-scheduling (v0.6'da doğrulayıcı zaman aşımı; v0.7'de 13 turda, 127k), multi-source-data-merger (47k). <b>Kaybedilen:</b> build-pmars (model kaynaktan derlemek yerine hazır Debian paketinin ikilisini çıkardı; testler "kaynaktan derlendi mi", "X11'siz mi" kontrol ediyor) ve portfolio-optimization (C uzantısını hatalı yazdı, dizi boyutu hatası). İki kayıp da modelin strateji seçimi; v0.7 mekanizmalarından birinin kesmesiyle olmadı (ikisi de bütçenin altında, stuck-loop ile bitti). log-summary-date-ranges bu kez 5 turda, 32k ile geçti.</p></div>
+<div class="finding s-bad"><div class="top"><h3>Token bütçesi dolan 16 görev tokenin %37'sini yiyor</h3><span class="pill">sıradaki kaldıraç</span></div>
+<p>16 görev 300k sınırına kadar gidip 0 aldı (4,9M token). Geçen 5 görevin en pahalısı 191k (nginx-request-logging). Simülasyon: bütçe 200k olsaydı aynı 5 geçişle toplam 10,9M, skor <b>−0,053</b>; 150k'da nginx kaybedilir, 4 geçişle −0,047.</p></div>
+<div class="finding s-warn"><div class="top"><h3>Length kesilmesi 14 → 17 görev</h3><span class="pill">model sınırı</span></div>
+<p>Sınır 3'e inince bu görevler daha ucuza bitti (toplam 1,7M), ama sayı arttı: configure-git-webserver bu kez buradan düştü. Büyük tek dosya yazan görevlerde 4096 çıktı tavanı hâlâ belirleyici.</p></div>
+<div class="finding s-warn"><div class="top"><h3>Kalan zaman aşımları ve öz-doğrulama</h3><span class="pill">küçük iş</span></div>
+<ul><li>Yeni kalıp: <code>tail -f</code> (hiç dönmez) 3 zaman aşımı; çözüm <code>tail -n</code>'e çevirmek. apt bazı görevlerde 300 sn'de bile bitmedi (yavaş ağ).</li>
+<li><code>verification_status=passed</code> 34 görevde, gerçek geçiş 4: zincir-komut filtresi yanlış "tamam" beyanlarını azaltmadı. Bu, scaffold'dan çok model yetkinliği sorunu.</li></ul></div>
+</div>
+<h3>Geçiş değişimi (+ v0.7'nin hedeflediği 2 görev)</h3>
+<div class="scroll"><table class="matrix"><tr><th>Görev</th><th>v0.6</th><th>Token</th><th>v0.7</th><th>Sonlanma</th><th>Token</th></tr><tr><td class='task'>modernize-scientific-stack</td><td><span class='cell P'>PASS</span></td><td class='tally'>35k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>31k</td></tr><tr><td class='task'>nginx-request-logging</td><td><span class='cell P'>PASS</span></td><td class='tally'>242k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>191k</td></tr><tr><td class='task'>build-pmars</td><td><span class='cell P'>PASS</span></td><td class='tally'>304k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>stuck-loop</td><td class='tally'>264k</td></tr><tr><td class='task'>constraints-scheduling</td><td><span class='cell I'>ALTY</span></td><td class='tally'>299k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>127k</td></tr><tr><td class='task'>log-summary-date-ranges</td><td><span class='cell F'>FAIL</span></td><td class='tally'>170k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>32k</td></tr><tr><td class='task'>multi-source-data-merger</td><td><span class='cell F'>FAIL</span></td><td class='tally'>61k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>47k</td></tr><tr><td class='task'>portfolio-optimization</td><td><span class='cell P'>PASS</span></td><td class='tally'>47k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>stuck-loop</td><td class='tally'>242k</td></tr><tr><td class='task'>configure-git-webserver</td><td><span class='cell F'>FAIL</span></td><td class='tally'>90k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>length</td><td class='tally'>126k</td></tr><tr><td class='task'>sqlite-with-gcov</td><td><span class='cell F'>FAIL</span></td><td class='tally'>273k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>bütçe doldu</td><td class='tally'>308k</td></tr></table></div>
+<h3>v0.7 sonlanma dağılımı</h3>
+<div class="scroll"><table><tr><th>Neden</th><th>Görev</th><th>Token</th><th>Pay</th></tr><tr><td class='mono'>stuck-loop</td><td class='tally'>27</td><td class='tally'>3.61M</td><td class='tally'>27%</td></tr><tr><td class='mono'>tamam dedi</td><td class='tally'>24</td><td class='tally'>2.54M</td><td class='tally'>19%</td></tr><tr><td class='mono'>length</td><td class='tally'>17</td><td class='tally'>1.72M</td><td class='tally'>13%</td></tr><tr><td class='mono'>bütçe doldu</td><td class='tally'>16</td><td class='tally'>4.92M</td><td class='tally'>37%</td></tr><tr><td class='mono'>kanıtsız bitiş</td><td class='tally'>3</td><td class='tally'>0.25M</td><td class='tally'>2%</td></tr><tr><td class='mono'>—</td><td class='tally'>2</td><td class='tally'>0.31M</td><td class='tally'>2%</td></tr></table></div>
+<div class="decision"><h2>Açık karar</h2><ol>
+<li><b>v0.7 → main merge:</b> skor +0,243, altyapı sorunu yok. Önerim merge.</li>
+<li><b>v0.7.1 (ucuz):</b> bütçe 300k → 200k, <code>tail -f</code> → <code>tail -n</code>. Simülasyonda −0,053. Bu tek başına skoru pozitife çıkarmaz.</li>
+<li><b>Pozitif skor için:</b> 200k'da başabaş ~10 geçiş gerektiriyor (şu an 5). Scaffold kaldıraçları büyük ölçüde tükendi; kalan sorunlar (yanlış "tamam", 4096 tavanı, strateji seçimi) model yetkinliği. Sıradaki büyük karar model değişikliği (yol haritasında zaten vardı).</li></ol>
+<p class="note">Kaynak: <code>jobs/v07-full-run1/*/result.json</code>, verifier çıktıları. Ağ kesintisi nedeniyle yeniden koşulan 7 trial'ın yalnızca son hali sayıldı.</p></div>
+</section>
 </div></body></html>
