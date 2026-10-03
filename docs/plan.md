@@ -6,6 +6,13 @@
 > (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
 > Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
 
+## 🟣 2026-10-03 — v0.7 MAIN'E MERGE EDİLDİ (tag v0.7) + v0.8 KÖK NEDEN/LİTERATÜR — YENİ SOHBET BURADAN OKUMALI
+
+**⚠️ Kural bulgusu:** Geliştirme modelimiz `Qwen3-30B-A3B-Instruct-2507` ONAYLI LİSTEDE YOK (README "Approved models": Qwen3.6-27B anchor, Qwen3-Coder-30B-A3B, Qwen2.5-Coder-32B/14B/7B). Submitted run için model değişikliği zorunlu.
+**Kullanıcı kararı:** Basit düzeltmelerle (200k bütçe, `tail -f`) tekrar tam koşu YOK; kök sorunlara bakılacak, basit düzeltmeler v0.8 ile birlikte yapılacak.
+**Belge:** `docs/v0.8-kok-neden-ve-literatur.md`. Özet: literatürde Qwen3.6-27B basit harness ile TB2.0 %39,6 (Tmax), kendi scaffold'uyla %59,3. Kök nedenler: model kapasitesi, edit (str_replace) aracı yok, 4096 tavanı, gereksinim çıkarmadan "tamam", sert guardrail sonlandırmaları (v0.7'de 60/89 görev scaffold tarafından kesildi).
+**Açık karar (kullanıcı):** model (Qwen3.6-27B önerilen) + erişim sağlayıcı; v0.8 kapsamı (B–F); canary planı (10 görev, önce sadece model, sonra v0.8 kodu).
+
 ## 🟢 2026-10-03 — v0.7 TAM KOŞU SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
 
 **Koşu:** `jobs/v07-full-run1` (ağ kesintisi nedeniyle 2 kez `harbor job resume -f APIConnectionError -f APITimeoutError -f CancelledError`). Sonuç: **5/89** (constraints-scheduling, log-summary-date-ranges, modernize-scientific-stack, multi-source-data-merger, nginx-request-logging), **13,36M token** (v0.6: 36,54M), **leaderboard −0,077** (v0.6: −0,320). Rapor: `docs/v0.6-full-run-report.html` en alt bölüm.
