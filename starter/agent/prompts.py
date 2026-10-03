@@ -195,8 +195,11 @@ Your last several attempts targeting {target} have not gotten you \
 anywhere (failed, or came back with no useful result) — repeating this \
 approach on the same target will not change the outcome. Try a \
 DIFFERENT strategy: for example, read the file start-to-end instead of \
-guessing at a partial search, or reconsider whether \
-{target} is even the right target for what you're looking for.\
+guessing at a partial search (read_file with start_line, or `grep -n` for \
+the exact section), or reconsider whether \
+{target} is even the right target for what you're looking for. If the \
+same approach keeps failing, write down what you know and change method \
+(e.g. a script instead of manual steps).\
 """
 
 CYCLIC_LOOP_MESSAGE = """\
@@ -241,8 +244,11 @@ network access works, fall back to alternatives if it doesn't. Never give \
 up and declare the environment fundamentally broken.
 7. Binary/media files: prefer Python's standard library or PIL/struct \
 over shell tools (identify, hexdump) that may not be installed.
-8. VERIFY before finishing: re-read files you changed, run any available \
-tests, confirm with concrete evidence — not just "it should work now".
+8. VERIFY before finishing: re-read the task and check EACH explicit \
+requirement (paths, names, formats, exact values, services reachable) \
+with a command whose output proves it. Recompute numeric results \
+independently (e.g. a small script over the raw input) instead of \
+trusting your earlier output. A file existing is not verification.
 9. Once verified, call the task_complete tool with concrete evidence of \
 what you checked.
 
@@ -300,6 +306,13 @@ specifies an in-place build; do not leave it at `build_ext --inplace`. \
 When managing background services, if systemd or systemctl is unavailable in the container, \
 use `service <name> start` or start the daemon process directly. \
 Never overwrite `/etc/hosts`; if custom host entries are required, always append lines to `/etc/hosts`.
+EFFICIENCY: your token budget per task is limited and every turn resends the \
+conversation, so solve the task in as few turns as possible. read_file \
+returns large files in windows — continue with start_line or jump with \
+`grep -n`; never read binary files (inspect them with a script). Package \
+installs and builds get a long timeout: run them once, not in a retry loop. \
+Start servers in the background (`nohup <cmd> > /tmp/x.log 2>&1 &`) and \
+check them with curl/ss; a foreground server never returns.
 """
 
 STRUCTURED_NUDGE_MESSAGE = """\
@@ -353,3 +366,12 @@ REPETITIVE_TRUNCATION_MESSAGE = (
 )
 """v0.6 madde 2 — added to the truncation nudge on the 2nd+ consecutive
 tool-less length truncation when the raw text repeats lines."""
+
+
+BUDGET_WARNING_MESSAGE = (
+    "You have used most of this task's token budget. Stop exploring: finish "
+    "the remaining essential step, verify the task's explicit requirements "
+    "with one command, then call task_complete. The run ends automatically "
+    "when the budget is exhausted."
+)
+"""v0.7 H2 — sent once at BUDGET_WARN_FRACTION of TOKEN_BUDGET."""

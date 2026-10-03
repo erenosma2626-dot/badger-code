@@ -6,6 +6,18 @@
 > (agy), worker-claude-dev → Kıdemli Geliştirici (Opus), Luna/Terra → Genel
 > Uygulayıcı (Luna), supervisor → Leader (Opus). Ayrıntı: `CLAUDE.md` → AionUi Çalışma Düzeni.
 
+## 🟢 2026-10-03 — v0.7 TAM KOŞU SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
+
+**Koşu:** `jobs/v07-full-run1` (ağ kesintisi nedeniyle 2 kez `harbor job resume -f APIConnectionError -f APITimeoutError -f CancelledError`). Sonuç: **5/89** (constraints-scheduling, log-summary-date-ranges, modernize-scientific-stack, multi-source-data-merger, nginx-request-logging), **13,36M token** (v0.6: 36,54M), **leaderboard −0,077** (v0.6: −0,320). Rapor: `docs/v0.6-full-run-report.html` en alt bölüm.
+**Lead notu:** Mekanizmalar doğrulandı (zaman aşımı 121→29, dpkg kilidi 21→7 görev, 32 sunucu arka plana). build-pmars ve portfolio-optimization kaybedildi (model strateji varyansı). 16 görev 300k bütçeyi doldurup tokenin %37'sini yedi; 200k bütçe simülasyonu −0,053. Kalan sorunlar büyük ölçüde model yetkinliği. **Açık karar (kullanıcı):** v0.7 main'e merge; v0.7.1 (200k + `tail -f` düzeltmesi); model değişikliği.
+
+## 🟢 2026-09-28 — v0.7 UYGULANDI (token verimliliği + komut yönetimi) — YENİ SOHBET BURADAN OKUMALI
+
+**Dal:** `feature/v0.7-token-verimlilik` (main'e merge edilmedi). Leader kullanıcının açık isteğiyle kendisi uyguladı. TDD, 186/186 test.
+**Değişiklikler:** H1 geçmiş kırpma (`agent/context_budget.py`, son 6 sonuç tam), H2 görev başı token bütçesi 300k (`AGENT_TOKEN_BUDGET`, %70 uyarı, `token_budget_exhausted`), H3 kurulum/derleme 300 sn + apt kilit bekleme + zaman aşımı ipucu, H4 ön plan sunucuları otomatik arka plan (`agent/command_policy.py`), H5 PID normalize parmak izi, H6 zincir-komut doğrulama tanımı + prompt'ta gereksinim bazlı doğrulama, H7 length sınırı 4→3, read_file baştan pencere + `start_line` + ikili dosya özeti (eski sürüm SON 3000 karakteri gösteriyordu), terminal çıktısı baş+son.
+**Faz B tekrar oynatma:** 121 zaman aşımının 108'i kapsanıyor; bağlam −%37. Tahmin: ~14M token, 4 geçişle ~−0,10.
+**Sıradaki (kullanıcı onayı):** 7 görev × n=2 canary (sqlite-with-gcov, configure-git-webserver, log-summary-date-ranges + Faz B'de geçen 4). Rapor: `docs/v0.6-full-run-report.html` en alt bölüm.
+
 ## 🔴 2026-09-28 — v0.6 FAZ B (89 GÖREV TAM KOŞU) SONUÇLANDI — YENİ SOHBET BURADAN OKUMALI
 
 **Koşu:** `jobs/v06-full-run1` (2026-09-24 12:41 → 09-25 00:23, ajan süresi 7,2 sa). Rapor: `docs/v0.6-full-run-report.html`.
@@ -14,7 +26,7 @@
 
 **Bulgular:** (1) Token cezası skordan 7 kat büyük; girdi/çıktı 55:1, en pahalı 20 görev tokenin %68'i ve hepsi 0. Geçenlerin hepsi ≤302k. (2) Sonlanma: stuck-loop 34, task_complete 29 (25'i yanlış), length-kesilme 14, kanıtsız bitiş 6, max_turns 4. (3) `verification_status=passed` 39 → sadece 4 gerçek geçiş. (4) configure-git-webserver / log-summary-date-ranges / sqlite-with-gcov 0 aldı; önceki %20–30 başarı oranıyla k=1 varyansı içinde.
 
-**Lead notu (2026-09-28):** v0.6 olduğu gibi Faz C olarak gönderilmemeli (negatif skor). Sıradaki iş token verimliliği: geçmiş kırpma + görev başı token bütçesi. $ maliyeti ölçülmedi, Nebius panelinden okunmalı. **Açık karar (kullanıcı):** v0.7 kapsamı (token verimliliği) ve bütçe Faz C'ye yetiyor mu.
+**Lead notu (2026-09-28):** v0.6 olduğu gibi Faz C olarak gönderilmemeli (negatif skor). Sıradaki iş token verimliliği: geçmiş kırpma + görev başı token bütçesi. $ maliyeti ölçülmedi, Nebius panelinden okunmalı. **Lead notu (2026-09-28, araştırma):** `docs/v0.7-optimizasyon-arastirma.md` — 8 hata sınıfı. En kritik: görev başı token bütçesi, geçmiş kırpma, 60 sn zaman aşımının apt'yi kesmesi (20 görevde dpkg kilidi), ön plan sunucular. Eskiden geçen 3 görev v0.6 yüzünden değil; sqlite-with-gcov doğrudan zaman aşımı sorunu. **Açık karar (kullanıcı):** v0.7 kapsamı (token verimliliği) ve bütçe Faz C'ye yetiyor mu.
 
 ## 🔵 2026-09-24 — v0.6 HAZIRLIĞI BAŞLADI (Faz B = ilk 89-görev tam koşu) — YENİ SOHBET BURADAN OKUMALI
 

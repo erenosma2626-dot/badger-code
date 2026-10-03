@@ -137,17 +137,18 @@ def test_two_consecutive_length_with_repeated_lines_gets_minimal_nudge(monkeypat
     assert "minimal" in msgs[-1].lower()
 
 
-def test_four_consecutive_length_terminates_early(monkeypatch):
+def test_three_consecutive_length_terminates_early(monkeypatch):
+    # v0.7: cap lowered 4 -> 3
     turns = [(f"blob {i} " * 50, [], _LEN) for i in range(10)]
     ctx = run_structured_agent(monkeypatch, FakeEnvironment(), turns, max_turns=10)
     assert ctx.metadata["termination_reason"] == "consecutive_length_truncation"
-    assert ctx.metadata["turns"] == 4
+    assert ctx.metadata["turns"] == 3
 
 
 def test_length_counter_resets_after_a_tool_call(monkeypatch):
     call = ("", [{"id": "e", "name": "terminal_exec", "arguments": {"command": "echo hi"}}], {})
-    turns = [("a", [], _LEN), ("b", [], _LEN), ("c", [], _LEN), call,
-             ("d", [], _LEN), ("e", [], _LEN), ("f", [], _LEN),
+    turns = [("a", [], _LEN), ("b", [], _LEN), call,
+             ("d", [], _LEN), ("e", [], _LEN),
              ("", [{"id": "d", "name": "task_complete", "arguments": {"evidence": "ok"}}], {})]
     env = FakeEnvironment()
     ctx = run_structured_agent(monkeypatch, env, turns, max_turns=10)

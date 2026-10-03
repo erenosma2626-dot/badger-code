@@ -35,8 +35,20 @@ from dataclasses import dataclass, field
 
 from harbor.environments.base import BaseEnvironment
 
+from agent.command_policy import timeout_hint
+
 MAX_TAIL_CHARS = 3000
 """Max characters kept for stdout_tail/stderr_tail in a receipt."""
+
+HEAD_CHARS = 800
+"""v0.7 — long outputs keep this many leading chars plus the tail: compiler
+and test errors often print their first (root-cause) line at the top."""
+
+READ_MAX_LINES = 200
+READ_MAX_CHARS = 4000
+"""v0.7 — read_file returns a window from the START of the file (the old
+receipt kept only the last 3000 chars, so a large file's head was never
+visible and the model re-read it in a loop). Continue with start_line."""
 
 _output_store: dict[str, str] = {}
 """In-memory store of full (untruncated) command output, keyed by
@@ -104,6 +116,14 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to read."},
+                    "start_line": {
+                        "type": "integer",
+                        "description": (
+                            "1-based line to start from (default 1). Large files "
+                            "are returned in windows; use next_start_line from "
+                            "the receipt to continue."
+                        ),
+                    },
                 },
                 "required": ["path"],
             },
@@ -156,6 +176,8 @@ class ExecutionReceipt:
     content_bytes: int | None = None
     error: str | None = None
     warning: str | None = None
+    total_lines: int | None = None
+    next_start_line: int | None = None
 
     @property
     def note(self) -> str | None:
@@ -181,6 +203,10 @@ class ExecutionReceipt:
         }
         if self.warning is not None:
             d["warning"] = self.warning
+        if self.total_lines is not None:
+            d["total_lines"] = self.total_lines
+        if self.next_start_line is not None:
+            d["next_start_line"] = self.next_start_line
         return d
 
 
@@ -188,6 +214,27 @@ def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[-limit:]
+
+
+def _head_tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return (
+        text[:HEAD_CHARS]
+        + f"\n...[{omitted} chars omitted; full output via output_ref]...\n"
+        + text[-(limit - HEAD_CHARS):]
+    )
+
+
+def _looks_binary(raw: bytes) -> bool:
+    sample = raw[:8192]
+    if not sample:
+        return False
+    if b"\x00" in sample:
+        return True
+    text = sample.decode("utf-8", errors="replace")
+    return text.count("\ufffd") > len(text) * 0.1
 
 
 def _store_output(full_text: str) -> str:
@@ -235,7 +282,11 @@ async def terminal_exec(
     except Exception as exc:
         timed_out = "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
         return ExecutionReceipt(
-            tool="terminal_exec", exit_code=None, timed_out=timed_out, error=str(exc)
+            tool="terminal_exec",
+            exit_code=None,
+            timed_out=timed_out,
+            error=str(exc),
+            warning=timeout_hint(command, timeout_sec) if timed_out else None,
         )
 
     stdout = result.stdout or ""
@@ -254,8 +305,8 @@ async def terminal_exec(
         exit_code=result.return_code,
         timed_out=False,
         cwd_after=cwd_after,
-        stdout_tail=_tail(stdout),
-        stderr_tail=_tail(result.stderr or ""),
+        stdout_tail=_head_tail(stdout),
+        stderr_tail=_head_tail(result.stderr or ""),
         changed_paths=changed_paths,
         output_ref=ref,
     )
@@ -328,7 +379,7 @@ async def write_file(
 
 
 async def read_file(
-    environment: BaseEnvironment, path: str, timeout_sec: int
+    environment: BaseEnvironment, path: str, timeout_sec: int, start_line: int = 1
 ) -> ExecutionReceipt:
     """Read `path`'s content directly, base64-encoded round trip so the
     receipt's output_ref carries byte-exact content regardless of binary
@@ -390,12 +441,57 @@ async def read_file(
             stderr_tail=_tail(err_text),
         )
 
+    sha = hashlib.sha256(raw).hexdigest()
+    if _looks_binary(raw):
+        return ExecutionReceipt(
+            tool="read_file",
+            exit_code=0,
+            stdout_tail=f"<binary, {len(raw)} bytes; first 32 bytes hex: {raw[:32].hex()}>",
+            content_sha256=sha,
+            content_bytes=len(raw),
+            warning=(
+                "Binary file: its content is not shown. Inspect it with a "
+                "script (python3 struct/zipfile/torch, `file`, `xxd | head`, "
+                "`strings | head`) instead of read_file."
+            ),
+        )
+
     ref = _store_output(text)
+    lines = text.splitlines(keepends=True)
+    try:
+        start = max(1, int(start_line or 1))
+    except (TypeError, ValueError):
+        start = 1
+    if start == 1 and len(lines) <= READ_MAX_LINES and len(text) <= READ_MAX_CHARS:
+        return ExecutionReceipt(
+            tool="read_file",
+            exit_code=0,
+            stdout_tail=text,
+            output_ref=ref,
+            content_sha256=sha,
+            content_bytes=len(raw),
+        )
+
+    window: list[str] = []
+    size = 0
+    for line in lines[start - 1:]:
+        if len(window) >= READ_MAX_LINES or (window and size + len(line) > READ_MAX_CHARS):
+            break
+        window.append(line[:READ_MAX_CHARS])
+        size += len(window[-1])
+    end = start - 1 + len(window)
+    more = end < len(lines)
     return ExecutionReceipt(
         tool="read_file",
         exit_code=0,
-        stdout_tail=_tail(text),
+        stdout_tail="".join(window),
         output_ref=ref,
-        content_sha256=hashlib.sha256(raw).hexdigest(),
+        content_sha256=sha,
         content_bytes=len(raw),
+        total_lines=len(lines),
+        next_start_line=end + 1 if more else None,
+        warning=(
+            f"Showing lines {start}-{end} of {len(lines)}. "
+            + ("Call read_file with start_line=%d for more, or use `grep -n` to jump to what you need." % (end + 1) if more else "")
+        ).strip(),
     )

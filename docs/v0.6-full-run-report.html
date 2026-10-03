@@ -156,4 +156,78 @@ td.task{font-family:var(--mono);font-size:13px;white-space:nowrap}
 <li><b>B'yi C olarak göndermek:</b> önerilmez; negatif skor. Dürüstlük ilkesi gereği bütçe yetmezse son sağlıklı noktada durma kararı Faz C maliyetine göre verilmeli.</li>
 <li><b>Model değişikliği:</b> 4096 tavanı ve öz-doğrulama sorunları model sınırına işaret ediyor; token-verimli scaffold hazır olmadan model değiştirmek maliyeti artırır.</li></ol>
 <p class="note">Kaynak: <code>jobs/v06-full-run1/*/result.json</code> (agent_result.metadata), verifier çıktıları, trial.log. Maliyet ($) ölçülmedi. Önceki canary karşılaştırması sadece o koşularda yer alan 10 görevi kapsar.</p></section>
+
+<section><div class="eyebrow">Güncelleme · 2026-09-28 · v0.7</div>
+<h2>v0.7 uygulandı: bulunan her sorun için scaffold çözümü</h2>
+<p class="muted">Dal <code>feature/v0.7-token-verimlilik</code>. TDD: önce 22 yeni test (kırmızı), sonra kod. Tüm test paketi 186/186 yeşil. Tamamı genel scaffold değişikliği; göreve özel kod yok. Henüz gerçek koşu yapılmadı.</p>
+<div class="stats">
+<div class="stat"><span class="n">108 / 121</span><span class="l">Faz B zaman aşımı yeni kurallarla kapsanıyor (45 arka plana, 63 uzun süre)</span></div>
+<div class="stat"><span class="n">−%37</span><span class="l">geçmiş kırpma ile son bağlam boyutu (Faz B transkriptleri üzerinde tekrar oynatma)</span></div>
+<div class="stat"><span class="n">300k</span><span class="l">görev başı token bütçesi (%70'te tek uyarı)</span></div>
+<div class="stat"><span class="n">186</span><span class="l">test yeşil (166 → 186)</span></div>
+</div>
+<div class="findings">
+<div class="finding s-new"><div class="top"><h3>H1 · Geçmiş kırpma</h3><span class="pill">agent/context_budget.py</span></div>
+<p>Modele gönderilen görünümde sadece son 6 araç sonucu tam; eskiler exit kodu, hata ve 200 karakterlik özet olarak kalıyor. Eski write_file içerikleri ve uzun düşünce metinleri kısaltılıyor. Tam transkript log için değişmeden tutuluyor, araç çağrısı id eşleşmeleri korunuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H2 · Görev başı token bütçesi</h3><span class="pill">AGENT_TOKEN_BUDGET</span></div>
+<p>Varsayılan 300k girdi+çıktı. %70'te bir kez "keşfi bırak, doğrula, bitir" mesajı; %100'de <code>token_budget_exhausted</code> ile sonlanma. Faz B'de geçen 4 görev kırpma öncesi bile ≤302k idi. max_turns'e varan görevler (ort. 1,9M) artık otomatik kesiliyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H3 · Uzun komutlar ve dpkg kilidi</h3><span class="pill">agent/command_policy.py</span></div>
+<p>apt, pip, conda, npm, cargo, make, configure, R install.packages vb. 300 sn zaman aşımı alıyor (normal 60 sn). apt komutlarına otomatik <code>DEBIAN_FRONTEND=noninteractive</code> ve <code>-o DPkg::Lock::Timeout=120</code> ekleniyor: kilitte hata yerine bekliyor. Zaman aşımına uğrayan komutun receipt'inde somut kurtarma ipucu var (nohup + log, apt için bir kez <code>dpkg --configure -a</code>, PID'le kill döngüsü yapma).</p></div>
+<div class="finding s-new"><div class="top"><h3>H4 · Ön planda sunucu</h3><span class="pill">otomatik arka plan</span></div>
+<p><code>daemon off</code>, <code>sshd -D</code>, <code>http.server</code>, uvicorn/gunicorn, flask run, redis-server, npm start gibi dönmeyen komutlar nohup ile arka planda çalıştırılıp log'un son 20 satırı gösteriliyor; receipt modele "tekrar başlatma, curl/ss ile kontrol et" diyor. Zaten <code>&amp;</code>/nohup/setsid içerenlere dokunulmuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H5 · Döngü parmak izi</h3><span class="pill">PID normalizasyonu</span></div>
+<p>Tam tekrar algılayıcısı komut metnindeki çok haneli sayıları normalize ediyor (<code>kill 1107</code> = <code>kill 1130</code>). Çalıştırılan komut değişmiyor. nginx'in ~25 turluk PID döngüsü artık 3. turda yakalanır.</p></div>
+<div class="finding s-new"><div class="top"><h3>H6 · Doğrulama tanımı</h3><span class="pill">is_meaningful_verification</span></div>
+<p>Zincir ve pipe komutlarının her parçası kontrol ediliyor; <code>cd &amp;&amp; ls</code>, grep, find, wc, stat vb. tek başına doğrulama sayılmıyor. Sistem prompt'unda 8. adım: "görevin her açık gereksinimini çıktısı kanıtlayan bir komutla kontrol et, sayısal sonuçları bağımsız yeniden hesapla, dosyanın var olması doğrulama değildir".</p></div>
+<div class="finding s-new"><div class="top"><h3>read_file penceresi + ikili dosya</h3><span class="pill">yeni bulgu</span></div>
+<p>Analiz sırasında bulunan hata: eski read_file dosyanın <b>son</b> 3000 karakterini döndürüyordu, büyük dosyaların başı hiç görünmüyordu. Makefile.in, bottle.py gibi dosyaların tekrar tekrar okunduğu döngüler buradan besleniyordu. Artık dosyanın başından 200 satır / 4000 karakterlik pencere, <code>total_lines</code> ve <code>next_start_line</code> dönüyor; araçta yeni <code>start_line</code> parametresi var. İkili dosyalar (gpt2 ckpt, weights.pt, .bin) dökülmüyor, boyut + ilk 32 bayt hex + "script ile incele" uyarısı dönüyor. terminal_exec uzun çıktıda artık baş (800) + son kısmı birlikte tutuyor.</p></div>
+<div class="finding s-new"><div class="top"><h3>H7 · Length sınırı ve prompt</h3><span class="pill">4 → 3</span></div>
+<p>Art arda length kesilmesi 3'te sonlanıyor (Faz B'de bu yola giren 14 görevin hepsi 0 aldı). Sistem prompt'una kısa bir VERİMLİLİK bloğu eklendi (az tur, pencereli okuma, ikiliyi okuma, kurulumu bir kez çalıştır, sunucuyu arka planda başlat). Hedef-döngü uyarısı artık start_line/<code>grep -n</code> ve yöntem değiştirme öneriyor.</p></div>
+</div>
+<div class="scroll"><table><tr><th>Ölçüt</th><th>v0.6 (Faz B)</th><th>v0.7 beklenti (simülasyon)</th></tr>
+<tr><td>Toplam token</td><td class="tally">36,5M</td><td class="tally">~14M (kırpma + 300k bütçe)</td></tr>
+<tr><td>Leaderboard (4 geçişle)</td><td class="tally">−0,320</td><td class="tally">~−0,10</td></tr>
+<tr><td>Başabaş için gereken geçiş</td><td class="tally">33</td><td class="tally">~13</td></tr>
+<tr><td>Kurtarılması beklenen görevler</td><td>—</td><td>sqlite-with-gcov, configure-git-webserver (H3/H4); log-summary (H6, model varyansı)</td></tr></table></div>
+<div class="decision"><h2>Sıradaki adım</h2><ol>
+<li>7 görevlik canary (n=2): sqlite-with-gcov, configure-git-webserver, log-summary-date-ranges + Faz B'de geçen 4 görev (regresyon kontrolü). Ölçüt: geçen 4 korunuyor mu, görev başı token.</li>
+<li>Canary iyi çıkarsa Faz C tam koşu. Bütçe: canary ≈ 14 trial, düşük maliyet; tam koşu v0.6'nın yaklaşık %40'ı token.</li>
+<li>Tahminler Faz B transkriptlerinin tekrar oynatılmasına dayanıyor; model davranışı değişeceği için gerçek koşu şart.</li></ol></div>
+</section>
+
+<section><div class="eyebrow">Güncelleme · 2026-10-03 · v07-full-run1 sonucu</div>
+<h2>v0.7 tam koşu: 5/89, token %63 düştü, skor −0,320 → −0,077</h2>
+<p class="muted">89 görev, k=1, aynı model (Qwen3-30B-A3B), aynı dataset. Koşu internet kesintileri yüzünden iki kez <code>harbor job resume</code> ile sürdürüldü; ağ hatası alan 7 trial (<code>APIConnectionError</code>/<code>APITimeoutError</code>/<code>CancelledError</code>) silinip yeniden koşuldu. Son durumda altyapı hatası yok; 2 AgentTimeout + 1 VerifierTimeout (v0.6 ile aynı sayı).</p>
+<div class="stats">
+<div class="stat"><span class="n">5 / 89</span><span class="l">geçen görev · tb_score 0,056 (v0.6: 4/89)</span></div>
+<div class="stat"><span class="n">13,36M</span><span class="l">toplam token (v0.6: 36,54M) · tahmin 13,9M idi</span></div>
+<div class="stat"><span class="n" style="color:var(--tout)">−0,077</span><span class="l">leaderboard_score (v0.6: −0,320) · +0,243 iyileşme</span></div>
+<div class="stat"><span class="n">126k</span><span class="l">görev başı medyan token (v0.6: 203k) · girdi/çıktı 55 → 29</span></div>
+</div>
+<div class="findings">
+<div class="finding s-good"><div class="top"><h3>Mekanizmalar çalıştı</h3><span class="pill">doğrulandı</span></div>
+<ul><li>Komut zaman aşımı 121 → 29. apt kilidi/yarım dpkg görülen görev 21 → 7.</li>
+<li>32 ön plan sunucu komutu otomatik arka plana alındı (v0.6: 0).</li>
+<li>215 pencereli read_file, 26 ikili dosya okuması özetlendi (eskiden dökülüyordu).</li>
+<li>v0.6'nın en pahalı 5 görevi (code-from-image 2,5M, custom-memory-heap-crash, install-windows-3.11, compile-compcert, password-recovery) her biri 1,4–2,4M token daha az harcadı.</li></ul></div>
+<div class="finding s-new"><div class="top"><h3>2 yeni geçiş, 2 kayıp</h3><span class="pill">varyans</span></div>
+<p><b>Kazanılan:</b> constraints-scheduling (v0.6'da doğrulayıcı zaman aşımı; v0.7'de 13 turda, 127k), multi-source-data-merger (47k). <b>Kaybedilen:</b> build-pmars (model kaynaktan derlemek yerine hazır Debian paketinin ikilisini çıkardı; testler "kaynaktan derlendi mi", "X11'siz mi" kontrol ediyor) ve portfolio-optimization (C uzantısını hatalı yazdı, dizi boyutu hatası). İki kayıp da modelin strateji seçimi; v0.7 mekanizmalarından birinin kesmesiyle olmadı (ikisi de bütçenin altında, stuck-loop ile bitti). log-summary-date-ranges bu kez 5 turda, 32k ile geçti.</p></div>
+<div class="finding s-bad"><div class="top"><h3>Token bütçesi dolan 16 görev tokenin %37'sini yiyor</h3><span class="pill">sıradaki kaldıraç</span></div>
+<p>16 görev 300k sınırına kadar gidip 0 aldı (4,9M token). Geçen 5 görevin en pahalısı 191k (nginx-request-logging). Simülasyon: bütçe 200k olsaydı aynı 5 geçişle toplam 10,9M, skor <b>−0,053</b>; 150k'da nginx kaybedilir, 4 geçişle −0,047.</p></div>
+<div class="finding s-warn"><div class="top"><h3>Length kesilmesi 14 → 17 görev</h3><span class="pill">model sınırı</span></div>
+<p>Sınır 3'e inince bu görevler daha ucuza bitti (toplam 1,7M), ama sayı arttı: configure-git-webserver bu kez buradan düştü. Büyük tek dosya yazan görevlerde 4096 çıktı tavanı hâlâ belirleyici.</p></div>
+<div class="finding s-warn"><div class="top"><h3>Kalan zaman aşımları ve öz-doğrulama</h3><span class="pill">küçük iş</span></div>
+<ul><li>Yeni kalıp: <code>tail -f</code> (hiç dönmez) 3 zaman aşımı; çözüm <code>tail -n</code>'e çevirmek. apt bazı görevlerde 300 sn'de bile bitmedi (yavaş ağ).</li>
+<li><code>verification_status=passed</code> 34 görevde, gerçek geçiş 4: zincir-komut filtresi yanlış "tamam" beyanlarını azaltmadı. Bu, scaffold'dan çok model yetkinliği sorunu.</li></ul></div>
+</div>
+<h3>Geçiş değişimi (+ v0.7'nin hedeflediği 2 görev)</h3>
+<div class="scroll"><table class="matrix"><tr><th>Görev</th><th>v0.6</th><th>Token</th><th>v0.7</th><th>Sonlanma</th><th>Token</th></tr><tr><td class='task'>modernize-scientific-stack</td><td><span class='cell P'>PASS</span></td><td class='tally'>35k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>31k</td></tr><tr><td class='task'>nginx-request-logging</td><td><span class='cell P'>PASS</span></td><td class='tally'>242k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>191k</td></tr><tr><td class='task'>build-pmars</td><td><span class='cell P'>PASS</span></td><td class='tally'>304k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>stuck-loop</td><td class='tally'>264k</td></tr><tr><td class='task'>constraints-scheduling</td><td><span class='cell I'>ALTY</span></td><td class='tally'>299k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>127k</td></tr><tr><td class='task'>log-summary-date-ranges</td><td><span class='cell F'>FAIL</span></td><td class='tally'>170k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>32k</td></tr><tr><td class='task'>multi-source-data-merger</td><td><span class='cell F'>FAIL</span></td><td class='tally'>61k</td><td><span class='cell P'>PASS</span></td><td class='mono'>tamam dedi</td><td class='tally'>47k</td></tr><tr><td class='task'>portfolio-optimization</td><td><span class='cell P'>PASS</span></td><td class='tally'>47k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>stuck-loop</td><td class='tally'>242k</td></tr><tr><td class='task'>configure-git-webserver</td><td><span class='cell F'>FAIL</span></td><td class='tally'>90k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>length</td><td class='tally'>126k</td></tr><tr><td class='task'>sqlite-with-gcov</td><td><span class='cell F'>FAIL</span></td><td class='tally'>273k</td><td><span class='cell F'>FAIL</span></td><td class='mono'>bütçe doldu</td><td class='tally'>308k</td></tr></table></div>
+<h3>v0.7 sonlanma dağılımı</h3>
+<div class="scroll"><table><tr><th>Neden</th><th>Görev</th><th>Token</th><th>Pay</th></tr><tr><td class='mono'>stuck-loop</td><td class='tally'>27</td><td class='tally'>3.61M</td><td class='tally'>27%</td></tr><tr><td class='mono'>tamam dedi</td><td class='tally'>24</td><td class='tally'>2.54M</td><td class='tally'>19%</td></tr><tr><td class='mono'>length</td><td class='tally'>17</td><td class='tally'>1.72M</td><td class='tally'>13%</td></tr><tr><td class='mono'>bütçe doldu</td><td class='tally'>16</td><td class='tally'>4.92M</td><td class='tally'>37%</td></tr><tr><td class='mono'>kanıtsız bitiş</td><td class='tally'>3</td><td class='tally'>0.25M</td><td class='tally'>2%</td></tr><tr><td class='mono'>—</td><td class='tally'>2</td><td class='tally'>0.31M</td><td class='tally'>2%</td></tr></table></div>
+<div class="decision"><h2>Açık karar</h2><ol>
+<li><b>v0.7 → main merge:</b> skor +0,243, altyapı sorunu yok. Önerim merge.</li>
+<li><b>v0.7.1 (ucuz):</b> bütçe 300k → 200k, <code>tail -f</code> → <code>tail -n</code>. Simülasyonda −0,053. Bu tek başına skoru pozitife çıkarmaz.</li>
+<li><b>Pozitif skor için:</b> 200k'da başabaş ~10 geçiş gerektiriyor (şu an 5). Scaffold kaldıraçları büyük ölçüde tükendi; kalan sorunlar (yanlış "tamam", 4096 tavanı, strateji seçimi) model yetkinliği. Sıradaki büyük karar model değişikliği (yol haritasında zaten vardı).</li></ol>
+<p class="note">Kaynak: <code>jobs/v07-full-run1/*/result.json</code>, verifier çıktıları. Ağ kesintisi nedeniyle yeniden koşulan 7 trial'ın yalnızca son hali sayıldı.</p></div>
+</section>
 </div></body></html>
