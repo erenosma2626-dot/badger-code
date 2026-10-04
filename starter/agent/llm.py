@@ -43,6 +43,7 @@ Improvement ideas
 """
 
 import asyncio
+import json
 import os
 import random
 
@@ -152,6 +153,15 @@ class LLMClient:
         # timeout (600s) would let a single hung request eat most of the
         # agent's time budget, so bound it.
         self.request_timeout = float(os.environ.get("LLM_REQUEST_TIMEOUT", "240"))
+        # Provider-specific request fields as JSON, e.g.
+        # {"chat_template_kwargs": {"enable_thinking": true}} (Qwen thinking
+        # mode on vLLM/SGLang-style servers) or an OpenRouter "provider"
+        # constraint. Unset = nothing extra is sent.
+        raw_extra = os.environ.get("LLM_EXTRA_BODY", "").strip()
+        try:
+            self.extra_body = json.loads(raw_extra) if raw_extra else None
+        except ValueError as exc:
+            raise ValueError(f"LLM_EXTRA_BODY is not valid JSON: {exc}") from exc
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
@@ -186,6 +196,10 @@ class LLMClient:
                 retries += 1
                 await asyncio.sleep(delay)
 
+    def _extra_kwargs(self) -> dict:
+        extra = getattr(self, "extra_body", None)
+        return {"extra_body": extra} if extra else {}
+
     async def chat(self, messages: list[dict]) -> tuple[str, dict]:
         """Send the conversation history to the LLM and get a response.
 
@@ -215,6 +229,7 @@ class LLMClient:
             messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            **self._extra_kwargs(),
         )
         message = response.choices[0].message
         text = message.content or ""
@@ -290,6 +305,7 @@ class LLMClient:
             messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            **self._extra_kwargs(),
             tools=tools,
             tool_choice="auto",
         )
